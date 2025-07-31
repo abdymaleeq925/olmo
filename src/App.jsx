@@ -24,7 +24,7 @@ import {
   SelectItem,
   SelectValue,
 } from "./components/ui/select";
-import { materialData } from "./materialData";
+import { buyersList, materialData } from "./materialData";
 import "./App.css";
 import { useDebounce } from "use-debounce";
 
@@ -37,7 +37,8 @@ function App() {
     orderPeriodEnd: "",
     proformNumber: "",
     proformDate: "",
-    margin: 10,
+    costPrice: 0,
+    margin: 0,
     buyer: "",
     iin: "",
     bankAccount: "",
@@ -48,6 +49,8 @@ function App() {
   const [open, setOpen] = useState(false);
   const [error, setError] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isPopoverOpen, setIsPopoverOpen] = useState(false);
+  const [filteredBuyers, setFilteredBuyers] = useState(buyersList);
   const [downloadUrl, setDownloadUrl] = useState("");
   const [iinError, setIinError] = useState("");
   const [bankAccountError, setBankAccountError] = useState("");
@@ -68,7 +71,6 @@ function App() {
       }
     }
   }, []);
-  
 
   const login = useGoogleLogin({
     clientId: import.meta.env.VITE_CLIENT_ID,
@@ -104,7 +106,6 @@ function App() {
     localStorage.removeItem("google_sheets_token_time");
   };
 
-
   const addItem = (item) => {
     const existingItem = selectedItems.find((i) => i.id === item.id);
     if (existingItem) {
@@ -138,11 +139,12 @@ function App() {
     );
   }, 0);
 
-  // --- Агрегация товаров по периоду для Счет на оплату ---
   async function aggregateItemsFromPeriod(token, periodStart, periodEnd) {
     // Получить все листы из файла "Артис Строй"
     const sheetsInfoResponse = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${import.meta.env.VITE_SPREADSHEET_ID}`,
+      `https://sheets.googleapis.com/v4/spreadsheets/${
+        import.meta.env.VITE_SPREADSHEET_ID
+      }`,
       {
         headers: { Authorization: `Bearer ${token}` },
       }
@@ -158,7 +160,7 @@ function App() {
     }
     const start = parseDate(periodStart);
     const end = parseDate(periodEnd);
-    
+
     const filteredSheets = sheetsInfo.sheets.filter((sheet) => {
       const title = sheet.properties.title;
       if (title.length < 17) return false;
@@ -175,7 +177,9 @@ function App() {
       const title = sheet.properties.title;
       // Получаем диапазон B9:F (до строки с "Итого" в B)
       const dataResp = await fetch(
-        `https://sheets.googleapis.com/v4/spreadsheets/${import.meta.env.VITE_SPREADSHEET_ID}/values/'${encodeURIComponent(title)}'!B9:F1000`,
+        `https://sheets.googleapis.com/v4/spreadsheets/${
+          import.meta.env.VITE_SPREADSHEET_ID
+        }/values/'${encodeURIComponent(title)}'!B9:F1000`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
       const data = await dataResp.json();
@@ -196,12 +200,12 @@ function App() {
     // Объединяем одинаковые товары с одинаковой ценой
     const mergedMap = new Map();
     let deliveryItem = null;
-    
+
     for (const item of allItems) {
       const name = item.name?.trim();
       const price = Number(item.price);
       const quantity = Number(item.quantity);
-    
+
       if (name === "Доставка") {
         if (deliveryItem) {
           deliveryItem.quantity += quantity;
@@ -211,9 +215,9 @@ function App() {
         }
         continue;
       }
-    
+
       const key = `${name.toLowerCase()}__${price}`;
-    
+
       if (mergedMap.has(key)) {
         const existing = mergedMap.get(key);
         existing.quantity += quantity;
@@ -221,17 +225,16 @@ function App() {
         mergedMap.set(key, { ...item });
       }
     }
-    
+
     // Собираем результат
     const merged = Array.from(mergedMap.values());
-    
+
     // Добавляем доставку в конец, если она есть
     if (deliveryItem) {
       merged.push(deliveryItem);
     }
-    
+
     return merged;
-    
   }
 
   const submitOrder = async (token) => {
@@ -245,13 +248,21 @@ function App() {
     setSubmissionStatus("");
 
     let itemsToUse = selectedItems;
-    // Если счет на оплату — агрегируем товары по периоду
+
     if (orderProform.orderType === "Счет на оплату") {
       try {
         itemsToUse = await aggregateItemsFromPeriod(
           token,
-          orderProform.orderPeriodStart.replace(/-/g, '.').split('.').reverse().join('.'),
-          orderProform.orderPeriodEnd.replace(/-/g, '.').split('.').reverse().join('.')
+          orderProform.orderPeriodStart
+            .replace(/-/g, ".")
+            .split(".")
+            .reverse()
+            .join("."),
+          orderProform.orderPeriodEnd
+            .replace(/-/g, ".")
+            .split(".")
+            .reverse()
+            .join(".")
         );
       } catch (e) {
         setError("Ошибка при сборе товаров по периоду: " + e.message);
@@ -260,32 +271,46 @@ function App() {
       }
     }
 
-
-
     const totalSum = itemsToUse.reduce((sum, item) => {
       return (
         sum +
         Math.round(
-          item.name === 'Доставка' ? item.price : (orderProform.orderType === "Накладная" ? +(item.price * (1 + orderProform.margin / 100)).toFixed(2) : item.price) *
-          item.quantity
-        ))
+          item.name === "Доставка"
+            ? item.price
+            : (orderProform.orderType === "Накладная"
+                ? +(item.price * (1 + orderProform.margin / 100)).toFixed(2)
+                : item.price) * item.quantity
+        )
+      );
     }, 0);
 
     const orderData = {
       orderProform: `${orderProform.orderType} №${
         orderProform.proformNumber
-      } от ${(orderProform.proformDate.length === 0 ? orderProform.orderPeriodEnd : orderProform.proformDate).split("-").reverse().join(".")} г.`,
+      } от ${(orderProform.proformDate.length === 0
+        ? orderProform.orderPeriodEnd
+        : orderProform.proformDate
+      )
+        .split("-")
+        .reverse()
+        .join(".")} г.`,
       orderDate: orderProform.proformDate.split("-").reverse().join("."),
       buyer: `Покупатель: ${orderProform.buyer} ИНН ${orderProform.iin}`,
       bankAccount: `р/с ${orderProform.bankAccount} в ${orderProform.bankName}`,
       items: itemsToUse.map((item) => ({
         name: item.name,
-        price: orderProform.orderType === "Накладная" ? +(item.price * (1 + orderProform.margin / 100)).toFixed(2) : item.price,
+        price:
+          orderProform.orderType === "Накладная"
+            ? +(item.price * (1 + orderProform.margin / 100)).toFixed(2)
+            : item.price,
         measure: item.measure,
         quantity: item.quantity,
         total: Math.round(
-          item.name === 'Доставка' ? item.price : (orderProform.orderType === "Накладная" ? +(item.price * (1 + orderProform.margin / 100)).toFixed(2) : item.price) *
-          item.quantity
+          item.name === "Доставка"
+            ? item.price
+            : (orderProform.orderType === "Накладная"
+                ? +(item.price * (1 + orderProform.margin / 100)).toFixed(2)
+                : item.price) * item.quantity
         ),
       })),
       totalSum: `Итого к оплате: ${convertNumberToWordsRu(
@@ -307,7 +332,9 @@ function App() {
       // 1. Создаем новый лист
       const createResponse = await fetch(
         `https://sheets.googleapis.com/v4/spreadsheets/${
-          orderProform.orderType === "Накладная" ? import.meta.env.VITE_SPREADSHEET_ID : import.meta.env.VITE_PERIOD_SPREADSHEET_ID
+          orderProform.orderType === "Накладная"
+            ? import.meta.env.VITE_SPREADSHEET_ID
+            : import.meta.env.VITE_PERIOD_SPREADSHEET_ID
         }:batchUpdate`,
         {
           method: "POST",
@@ -687,6 +714,10 @@ function App() {
                   userEnteredFormat: {
                     textFormat: { fontFamily: "Times New Roman", fontSize: 12 },
                     horizontalAlignment: "CENTER",
+                    numberFormat: { 
+                      type: "NUMBER", 
+                      pattern: "# ##0"
+                    }
                   },
                 },
               ],
@@ -740,6 +771,10 @@ function App() {
                         fontSize: 12,
                       },
                       horizontalAlignment: "RIGHT",
+                      numberFormat: { 
+                        type: "NUMBER", 
+                        pattern: "# ##0\" сом\""
+                      }
                     },
                   },
                   {},
@@ -984,7 +1019,9 @@ function App() {
       // 4. Отправляем все запросы на редактирование
       const formatResponse = await fetch(
         `https://sheets.googleapis.com/v4/spreadsheets/${
-          orderProform.orderType === "Накладная" ? import.meta.env.VITE_SPREADSHEET_ID : import.meta.env.VITE_PERIOD_SPREADSHEET_ID
+          orderProform.orderType === "Накладная"
+            ? import.meta.env.VITE_SPREADSHEET_ID
+            : import.meta.env.VITE_PERIOD_SPREADSHEET_ID
         }:batchUpdate`,
         {
           method: "POST",
@@ -999,133 +1036,141 @@ function App() {
       const formatResult = await formatResponse.json();
       if (!formatResponse.ok) throw new Error(JSON.stringify(formatResult));
 
-      // 5. Добавляем запись в Реестр только если это накладная
-        try {
-          const proformListResponse = await fetch(
+      // 5. Добавляем запись в Реестр
+      try {
+        const proformListResponse = await fetch(
+          `https://sheets.googleapis.com/v4/spreadsheets/${
+            orderProform.orderType === "Накладная"
+              ? import.meta.env.VITE_LIST_SPREADSHEET_ID
+              : import.meta.env.VITE_LIST_PERIOD_SPREADSHEET_ID
+          }/values/Реестр!A:G`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }
+        );
+
+        const proformListData = await proformListResponse.json();
+        if (!proformListResponse.ok)
+          throw new Error(JSON.stringify(proformListData));
+
+        const nextRow = orderProform.orderType === "Накладная" ? Math.max(6, (proformListData.values?.length || 5) + 1) : Math.max(4, (proformListData.value?.length || 3) + 1);
+        const proformListRowData = [
+          nextRow - 2,
+          `№${orderProform.proformNumber}`,
+          (orderProform.proformDate || orderProform.orderPeriodEnd).split("-").reverse().join("."),
+          totalSumInDigits.toString(),
+          orderProform.costPrice,
+          totalSumInDigits-orderProform.costPrice,
+          orderProform.buyer,
+        ];
+
+        const addToProformListResponse = await fetch(
+          `https://sheets.googleapis.com/v4/spreadsheets/${
+            orderProform.orderType === "Накладная"
+              ? import.meta.env.VITE_LIST_SPREADSHEET_ID
+              : import.meta.env.VITE_LIST_PERIOD_SPREADSHEET_ID
+          }/values/Реестр!A${nextRow}:G${nextRow}?valueInputOption=RAW`,
+          {
+            method: "PUT",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              values: [proformListRowData],
+            }),
+          }
+        );
+
+        if (!addToProformListResponse.ok) {
+          const proformListError = await addToProformListResponse.json();
+          console.warn("Ошибка добавления в реестр:", proformListError);
+        }
+
+        const sheetsInfoResponse = await fetch(
+          `https://sheets.googleapis.com/v4/spreadsheets/${
+            orderProform.orderType === "Накладная"
+              ? import.meta.env.VITE_LIST_SPREADSHEET_ID
+              : import.meta.env.VITE_LIST_PERIOD_SPREADSHEET_ID
+          }`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }
+        );
+
+        const sheetsInfo = await sheetsInfoResponse.json();
+        if (!sheetsInfoResponse.ok) throw new Error(JSON.stringify(sheetsInfo));
+
+        const proformListSheet = sheetsInfo.sheets.find(
+          (sheet) => sheet.properties.title === "Реестр"
+        );
+
+        if (proformListSheet) {
+          const proformListSheetId = proformListSheet.properties.sheetId;
+
+          const borderResponse = await fetch(
             `https://sheets.googleapis.com/v4/spreadsheets/${
-              orderProform.orderType === "Накладная" ? import.meta.env.VITE_LIST_SPREADSHEET_ID : import.meta.env.VITE_LIST_PERIOD_SPREADSHEET_ID
-            }/values/Реестр!A:G`,
+              orderProform.orderType === "Накладная"
+                ? import.meta.env.VITE_LIST_SPREADSHEET_ID
+                : import.meta.env.VITE_LIST_PERIOD_SPREADSHEET_ID
+            }:batchUpdate`,
             {
-              headers: {
-                Authorization: `Bearer ${token}`,
-              },
-            }
-          );
-
-          const proformListData = await proformListResponse.json();
-          if (!proformListResponse.ok)
-            throw new Error(JSON.stringify(proformListData));
-
-          const nextRow = Math.max(
-            6,
-            (proformListData.values?.length || 5) + 1
-          );
-          const proformListRowData = [
-            nextRow - 2,
-            `№${orderProform.proformNumber}`,
-            orderProform.proformDate.split("-").reverse().join("."),
-            totalSumInDigits.toString(),
-            "Себес",
-            "Прибыль",
-            orderProform.buyer,
-          ];
-
-          const addToProformListResponse = await fetch(
-            `https://sheets.googleapis.com/v4/spreadsheets/${
-              orderProform.orderType === "Накладная" ? import.meta.env.VITE_LIST_SPREADSHEET_ID : import.meta.env.VITE_LIST_PERIOD_SPREADSHEET_ID
-            }/values/Реестр!A${nextRow}:G${nextRow}?valueInputOption=RAW`,
-            {
-              method: "PUT",
+              method: "POST",
               headers: {
                 Authorization: `Bearer ${token}`,
                 "Content-Type": "application/json",
               },
               body: JSON.stringify({
-                values: [proformListRowData],
+                requests: [
+                  {
+                    updateBorders: {
+                      range: {
+                        sheetId: proformListSheetId,
+                        startRowIndex: nextRow - 1,
+                        endRowIndex: nextRow,
+                        startColumnIndex: 0,
+                        endColumnIndex: 7,
+                      },
+                      bottom: { style: "SOLID", width: 1 },
+                    },
+                  },
+                ],
               }),
             }
           );
 
-          if (!addToProformListResponse.ok) {
-            const proformListError = await addToProformListResponse.json();
-            console.warn("Ошибка добавления в реестр:", proformListError);
+          if (!borderResponse.ok) {
+            const borderError = await borderResponse.json();
+            console.warn("Ошибка добавления границы:", borderError);
           }
-
-          const sheetsInfoResponse = await fetch(
-            `https://sheets.googleapis.com/v4/spreadsheets/${
-              orderProform.orderType === "Накладная" ? import.meta.env.VITE_LIST_SPREADSHEET_ID : import.meta.env.VITE_LIST_PERIOD_SPREADSHEET_ID
-            }`,
-            {
-              headers: {
-                Authorization: `Bearer ${token}`,
-              },
-            }
-          );
-
-          const sheetsInfo = await sheetsInfoResponse.json();
-          if (!sheetsInfoResponse.ok)
-            throw new Error(JSON.stringify(sheetsInfo));
-
-          const proformListSheet = sheetsInfo.sheets.find(
-            (sheet) => sheet.properties.title === "Реестр"
-          );
-
-          if (proformListSheet) {
-            const proformListSheetId = proformListSheet.properties.sheetId;
-
-            const borderResponse = await fetch(
-              `https://sheets.googleapis.com/v4/spreadsheets/${
-                orderProform.orderType === "Накладная" ? import.meta.env.VITE_LIST_SPREADSHEET_ID : import.meta.env.VITE_LIST_PERIOD_SPREADSHEET_ID
-              }:batchUpdate`,
-              {
-                method: "POST",
-                headers: {
-                  Authorization: `Bearer ${token}`,
-                  "Content-Type": "application/json",
-                },
-                body: JSON.stringify({
-                  requests: [
-                    {
-                      updateBorders: {
-                        range: {
-                          sheetId: proformListSheetId,
-                          startRowIndex: nextRow - 1,
-                          endRowIndex: nextRow,
-                          startColumnIndex: 0,
-                          endColumnIndex: 7,
-                        },
-                        bottom: { style: "SOLID", width: 1 },
-                      },
-                    },
-                  ],
-                }),
-              }
-            );
-
-            if (!borderResponse.ok) {
-              const borderError = await borderResponse.json();
-              console.warn("Ошибка добавления границы:", borderError);
-            }
-          } else {
-            console.warn("Лист 'Реестр' не найден");
-          }
-        } catch (proformListError) {
-          console.warn("Ошибка при работе с реестром:", proformListError);
+        } else {
+          console.warn("Лист 'Реестр' не найден");
         }
+      } catch (proformListError) {
+        console.warn("Ошибка при работе с реестром:", proformListError);
+      }
 
       const excelDownloadUrl = `https://docs.google.com/spreadsheets/d/${
-        orderProform.orderType === "Накладная" ? import.meta.env.VITE_SPREADSHEET_ID : import.meta.env.VITE_PERIOD_SPREADSHEET_ID
+        orderProform.orderType === "Накладная"
+          ? import.meta.env.VITE_SPREADSHEET_ID
+          : import.meta.env.VITE_PERIOD_SPREADSHEET_ID
       }/export?format=xlsx&gid=${sheetId}`;
       setDownloadUrl(excelDownloadUrl);
       setSubmissionStatus(
         orderProform.orderType === "Накладная"
           ? "Накладная успешно создана!"
           : "Счет на оплату успешно создан!"
-          )
+      );
       return {
         sheetId,
         sheetUrl: `https://docs.google.com/spreadsheets/d/${
-          orderProform.orderType === "Накладная" ? import.meta.env.VITE_SPREADSHEET_ID : import.meta.env.VITE_PERIOD_SPREADSHEET_ID
+          orderProform.orderType === "Накладная"
+            ? import.meta.env.VITE_SPREADSHEET_ID
+            : import.meta.env.VITE_PERIOD_SPREADSHEET_ID
         }/edit#gid=${sheetId}`,
       };
     } catch (error) {
@@ -1155,6 +1200,17 @@ function App() {
       setBankAccountError("");
     }
   }, [debouncedBankAccount]);
+
+  useEffect(() => {
+    if (orderProform.buyer.length > 0) {
+      const filtered = buyersList.filter((buyer) =>
+        buyer.name.toLowerCase().includes(orderProform.buyer.toLowerCase())
+      );
+      setFilteredBuyers(filtered);
+    } else {
+      setFilteredBuyers(buyersList);
+    }
+  }, [orderProform.buyer]);
 
   return (
     <>
@@ -1258,18 +1314,58 @@ function App() {
                 )}
                 <div>
                   <Label htmlFor="buyer">Покупатель</Label>
-                  <Input
-                    id="buyer"
-                    type="text"
-                    value={orderProform.buyer}
-                    onChange={(e) =>
-                      setOrderProform((prev) => ({
-                        ...prev,
-                        buyer: e.target.value,
-                      }))
-                    }
-                  />
+                  <Popover open={isPopoverOpen} onOpenChange={setIsPopoverOpen}>
+                    <PopoverTrigger asChild>
+                      <div>
+                        <Input
+                          id="buyer"
+                          type="text"
+                          value={orderProform.buyer}
+                          onChange={(e) => {
+                            setOrderProform((prev) => ({
+                              ...prev,
+                              buyer: e.target.value,
+                            }));
+                            setIsPopoverOpen(true);
+                          }}
+                          onMouseDown={(e) => {
+                            e.preventDefault()
+                            setIsPopoverOpen(true)
+                          }}
+                          placeholder="Начните вводить название покупателя"
+                        />
+                      </div>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-[400px] p-4" align="start" onOpenAutoFocus={(e) => e.preventDefault()}>
+                      {filteredBuyers.length > 0 && (
+                        <div className="space-y-2">
+                          {filteredBuyers.map((buyer) => (
+                            <div
+                              key={buyer.name}
+                              className="p-2 hover:bg-gray-100 rounded cursor-pointer"
+                              onClick={() => {
+                                setOrderProform((prev) => ({
+                                  ...prev,
+                                  buyer: buyer.name,
+                                  iin: buyer.iin,
+                                  bankAccount: buyer.bankAccount,
+                                  bankName: buyer.bankName,
+                                }));
+                                setIsPopoverOpen(false);
+                              }}
+                            >
+                              <div className="font-medium">{buyer.name}</div>
+                              <div className="text-sm text-gray-500">
+                                {buyer.bankName}, {buyer.bankAccount}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </PopoverContent>
+                  </Popover>
                 </div>
+
                 <div>
                   <Label htmlFor="iin">ИИН</Label>
                   <Input
@@ -1285,7 +1381,9 @@ function App() {
                       }));
                     }}
                   />
-                  {iinError && <div className="text-red-500 text-xs mt-1">{iinError}</div>}
+                  {iinError && (
+                    <div className="text-red-500 text-xs mt-1">{iinError}</div>
+                  )}
                 </div>
                 <div>
                   <Label htmlFor="bankAccount">Р/С</Label>
@@ -1302,7 +1400,11 @@ function App() {
                       }));
                     }}
                   />
-                  {bankAccountError && <div className="text-red-500 text-xs mt-1">{bankAccountError}</div>}
+                  {bankAccountError && (
+                    <div className="text-red-500 text-xs mt-1">
+                      {bankAccountError}
+                    </div>
+                  )}
                 </div>
                 <div>
                   <Label htmlFor="bankName">Название Банка</Label>
@@ -1318,17 +1420,32 @@ function App() {
                     }
                   />
                 </div>
+
                 {orderProform.orderType === "Накладная" && (
+                  // <div>
+                  //   <Label htmlFor="margin">%</Label>
+                  //   <Input
+                  //     id="margin"
+                  //     type="text"
+                  //     value={orderProform.margin}
+                  //     onChange={(e) =>
+                  //       setOrderProform((prev) => ({
+                  //         ...prev,
+                  //         margin: e.target.value,
+                  //       }))
+                  //     }
+                  //   />
+                  // </div>
                   <div>
-                    <Label htmlFor="margin">%</Label>
+                    <Label htmlFor="margin">Себестоимость</Label>
                     <Input
                       id="margin"
-                      type="text"
-                      value={orderProform.margin}
+                      type="number"
+                      value={orderProform.costPrice}
                       onChange={(e) =>
                         setOrderProform((prev) => ({
                           ...prev,
-                          margin: e.target.value,
+                          costPrice: e.target.value,
                         }))
                       }
                     />
@@ -1343,13 +1460,16 @@ function App() {
                 </Button>
               </div>
               {submissionStatus && (
-                 <div>
-                 <img src="https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExdjJ3bXFidHA5NGRjaWphYWU2Nms1cDFodmNpYTQ1dGhpbGloa29nZiZlcD12MV9naWZzX3NlYXJjaCZjdD1n/nsclFvPcImZfMJPF4D/giphy.gif" alt="thanks" className="w-1/5 relative right-[-40%]"/>
-                 <p className="mt-4 text-center font-medium">
-                  {submissionStatus}
-                </p>
-               </div>
-                
+                <div>
+                  <img
+                    src="https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExdjJ3bXFidHA5NGRjaWphYWU2Nms1cDFodmNpYTQ1dGhpbGloa29nZiZlcD12MV9naWZzX3NlYXJjaCZjdD1n/nsclFvPcImZfMJPF4D/giphy.gif"
+                    alt="thanks"
+                    className="w-1/5 relative right-[-40%]"
+                  />
+                  <p className="mt-4 text-center font-medium">
+                    {submissionStatus}
+                  </p>
+                </div>
               )}
               {downloadUrl && (
                 <div className="mt-4 text-center">
@@ -1375,7 +1495,11 @@ function App() {
                 <CardContent>
                   <div className="mb-4">
                     <Label htmlFor="search">Поиск товаров</Label>
-                    <Popover open={open} onOpenChange={setOpen} className="w-[500px]]">
+                    <Popover
+                      open={open}
+                      onOpenChange={setOpen}
+                      className="w-[500px]]"
+                    >
                       <PopoverTrigger asChild>
                         <Button
                           variant="outline"
@@ -1535,7 +1659,7 @@ function App() {
       ) : (
         <div className="w-full h-screen flex flex-col justify-center items-center gap-4">
           <span className="text-2xl">Авторизуйтесь, Ошский Господин</span>
-          <img src="https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExZWRncG82Y2J0ZmdtNXpnaWx2MDFsejVyNDUwZ2NzbTkxN3pqY3h2MiZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/ILW1fbJHW0Ndm/giphy.gif"/>
+          <img src="https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExZWRncG82Y2J0ZmdtNXpnaWx2MDFsejVyNDUwZ2NzbTkxN3pqY3h2MiZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/ILW1fbJHW0Ndm/giphy.gif" />
           {isLoading ? (
             <Button className="px-6 py-3 rounded" disabled>
               Загрузка...
