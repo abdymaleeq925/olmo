@@ -75,24 +75,85 @@ function App() {
   const login = useGoogleLogin({
     clientId: import.meta.env.VITE_CLIENT_ID,
     scope: "https://www.googleapis.com/auth/spreadsheets",
-    onSuccess: (tokenResponse) => {
-      setToken(tokenResponse.access_token);
-      setError(null);
-      setIsLoading(false);
-      localStorage.setItem("google_sheets_token", tokenResponse.access_token);
-      localStorage.setItem("google_sheets_token_time", Date.now().toString());
-    },
+    onSuccess: async (codeResponse) => {
+      try {
+        setIsLoading(true);
+    
+        const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: new URLSearchParams({
+            code: codeResponse.code, // <-- Убедись, что есть .code
+            client_id: import.meta.env.VITE_CLIENT_ID,
+            client_secret: import.meta.env.VITE_CLIENT_SECRET,
+            redirect_uri: window.location.origin,
+            grant_type: "authorization_code",
+          }),
+        });
+    
+        const tokens = await tokenResponse.json();
+        if (!tokenResponse.ok) throw new Error(tokens.error || "Ошибка получения токенов");
+    
+        localStorage.setItem("google_access_token", tokens.access_token);
+        localStorage.setItem("google_refresh_token", tokens.refresh_token || "");
+        localStorage.setItem(
+          "google_token_expiry",
+          (Date.now() + tokens.expires_in * 1000).toString()
+        );
+    
+        setToken(tokens.access_token);
+        setError(null);
+      } catch (error) {
+        setError(error.message || "Ошибка авторизации");
+        console.error("Auth error:", error);
+        handleLogout();
+      } finally {
+        setIsLoading(false);
+      }
+    },    
     onError: (errorResponse) => {
       setError(errorResponse.error || "Неизвестная ошибка");
       setIsLoading(false);
-      console.error("Ошибка авторизации:", errorResponse);
     },
-    onNonOAuthError: () => {
-      setError("Ошибка инициализации Google OAuth");
-      setIsLoading(false);
-    },
-    flow: "implicit",
+    flow: "auth-code",
   });
+
+  const refreshToken = async () => {
+    try {
+      const refreshToken = localStorage.getItem("google_refresh_token");
+      if (!refreshToken) throw new Error("No refresh token");
+  
+      const response = await fetch("https://oauth2.googleapis.com/token", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          client_id: import.meta.env.VITE_CLIENT_ID,
+          client_secret: import.meta.env.VITE_CLIENT_SECRET,
+          refresh_token: refreshToken,
+          grant_type: "refresh_token",
+        }),
+      });
+  
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Ошибка обновления токена");
+  
+      localStorage.setItem("google_access_token", data.access_token);
+      localStorage.setItem("google_token_expiry", 
+        (Date.now() + (data.expires_in * 1000)).toString()
+      );
+  
+      setToken(data.access_token);
+      return data.access_token;
+    } catch (error) {
+      console.error("Refresh token error:", error);
+      handleLogout();
+      return null;
+    }
+  };
 
   const handleLogin = () => {
     setIsLoading(true);
@@ -102,8 +163,9 @@ function App() {
 
   const handleLogout = () => {
     setToken(null);
-    localStorage.removeItem("google_sheets_token");
-    localStorage.removeItem("google_sheets_token_time");
+    localStorage.removeItem("google_access_token");
+    localStorage.removeItem("google_refresh_token");
+    localStorage.removeItem("google_token_expiry");
   };
 
   const addItem = (item) => {
@@ -238,21 +300,26 @@ function App() {
   }
 
   const submitOrder = async (token) => {
-    if (!token) {
-      setError(
-        "Ваше время авторизации подошло к концу. Пожалуйста, авторизуйтесь снова."
-      );
-      return;
+    let validToken = token;
+    const expiryTime = localStorage.getItem("google_token_expiry");
+    
+    if (!expiryTime || parseInt(expiryTime, 10) - Date.now() < 30000) {
+      validToken = await refreshToken();
+      if (!validToken) {
+        setError("Сессия истекла. Пожалуйста, авторизуйтесь снова.");
+        return;
+      }
     }
     setIsSubmitting(true);
     setSubmissionStatus("");
+    setDownloadUrl("");
 
     let itemsToUse = selectedItems;
 
     if (orderProform.orderType === "Счет на оплату") {
       try {
         itemsToUse = await aggregateItemsFromPeriod(
-          token,
+          validToken,
           orderProform.orderPeriodStart
             .replace(/-/g, ".")
             .split(".")
@@ -339,7 +406,7 @@ function App() {
         {
           method: "POST",
           headers: {
-            Authorization: `Bearer ${token}`,
+            Authorization: `Bearer ${validToken}`,
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
@@ -491,19 +558,31 @@ function App() {
                 values: [
                   {
                     userEnteredValue: {
-                      stringValue:
-                        "Поставщик: ИП Женишбек у.Ж. ИНН 22712200100929 р/с 1240040001978972",
+                      stringValue: "Поставщик: ИП Женишбек у.Ж. ИНН 22712200100929 р/с 1240040001978972"
                     },
                     userEnteredFormat: {
                       textFormat: {
-                        bold: true,
                         fontFamily: "Times New Roman",
-                        fontSize: 12,
+                        fontSize: 12
                       },
-                      horizontalAlignment: "LEFT",
+                      horizontalAlignment: "LEFT"
                     },
-                  },
-                ],
+                    textFormatRuns: [
+                      {
+                        startIndex: 0,
+                        format: {
+                          bold: false
+                        }
+                      },
+                      {
+                        startIndex: 10, // После "Поставщик: "
+                        format: {
+                          bold: true
+                        }
+                      }
+                    ]
+                  }
+                ]
               },
               {
                 values: [
@@ -523,7 +602,7 @@ function App() {
                 ],
               },
             ],
-            fields: "userEnteredValue,userEnteredFormat",
+            fields: "userEnteredValue,userEnteredFormat,textFormatRuns",
           },
         },
         // Информация о покупателе
@@ -540,15 +619,31 @@ function App() {
               {
                 values: [
                   {
-                    userEnteredValue: { stringValue: orderData.buyer },
+                    userEnteredValue: { 
+                      stringValue: orderData.buyer
+                    },
                     userEnteredFormat: {
                       textFormat: {
-                        bold: true,
+                        bold: false,
                         fontFamily: "Times New Roman",
                         fontSize: 12,
                       },
                       horizontalAlignment: "LEFT",
                     },
+                    textFormatRuns: [
+                      {
+                        startIndex: 0,
+                        format: {
+                          bold: false
+                        }
+                      },
+                      {
+                        startIndex: 11,
+                        format: {
+                          bold: true
+                        }
+                      }
+                    ]
                   },
                 ],
               },
@@ -568,7 +663,7 @@ function App() {
                 ],
               },
             ],
-            fields: "userEnteredValue,userEnteredFormat",
+            fields: "userEnteredValue,userEnteredFormat,textFormatRuns",
           },
         },
         // Заголовки таблицы товаров
@@ -1026,7 +1121,7 @@ function App() {
         {
           method: "POST",
           headers: {
-            Authorization: `Bearer ${token}`,
+            Authorization: `Bearer ${validToken}`,
             "Content-Type": "application/json",
           },
           body: JSON.stringify({ requests }),
@@ -1046,7 +1141,7 @@ function App() {
           }/values/Реестр!A:G`,
           {
             headers: {
-              Authorization: `Bearer ${token}`,
+              Authorization: `Bearer ${validToken}`,
             },
           }
         );
@@ -1055,7 +1150,7 @@ function App() {
         if (!proformListResponse.ok)
           throw new Error(JSON.stringify(proformListData));
 
-        const nextRow = orderProform.orderType === "Накладная" ? Math.max(6, (proformListData.values?.length || 5) + 1) : Math.max(4, (proformListData.value?.length || 3) + 1);
+        const nextRow = orderProform.orderType === "Накладная" ? Math.max(6, (proformListData.values?.length || 5) + 1) : Math.max(4, (proformListData.values?.length || 3) + 1);
         const proformListRowData = [
           nextRow - 2,
           `№${orderProform.proformNumber}`,
@@ -1075,7 +1170,7 @@ function App() {
           {
             method: "PUT",
             headers: {
-              Authorization: `Bearer ${token}`,
+              Authorization: `Bearer ${validToken}`,
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
@@ -1097,7 +1192,7 @@ function App() {
           }`,
           {
             headers: {
-              Authorization: `Bearer ${token}`,
+              Authorization: `Bearer ${validToken}`,
             },
           }
         );
@@ -1121,7 +1216,7 @@ function App() {
             {
               method: "POST",
               headers: {
-                Authorization: `Bearer ${token}`,
+                Authorization: `Bearer ${validToken}`,
                 "Content-Type": "application/json",
               },
               body: JSON.stringify({
@@ -1172,6 +1267,7 @@ function App() {
             ? import.meta.env.VITE_SPREADSHEET_ID
             : import.meta.env.VITE_PERIOD_SPREADSHEET_ID
         }/edit#gid=${sheetId}`,
+        fileName: `${orderProform.buyer} - №${orderProform.proformNumber} от ${orderProform.proformDate || orderProform.orderPeriodEnd}.xlsx`
       };
     } catch (error) {
       console.error("Error creating order sheet:", error);
@@ -1179,6 +1275,25 @@ function App() {
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const validateForm = () => {
+    const requiredFields = {
+      buyer: orderProform.buyer.trim() !== "",
+      iin: orderProform.iin.trim() !== "" && !iinError,
+      bankAccount: orderProform.bankAccount.trim() !== "" && !bankAccountError,
+      bankName: orderProform.bankName.trim() !== "",
+      proformNumber: orderProform.proformNumber.trim() !== "",
+    };
+  
+    if (orderProform.orderType === "Накладная") {
+      requiredFields.proformDate = orderProform.proformDate.trim() !== "";
+    } else {
+      requiredFields.orderPeriodStart = orderProform.orderPeriodStart.trim() !== "";
+      requiredFields.orderPeriodEnd = orderProform.orderPeriodEnd.trim() !== "";
+    }
+  
+    return Object.values(requiredFields).every(Boolean);
   };
 
   useEffect(() => {
@@ -1211,6 +1326,30 @@ function App() {
       setFilteredBuyers(buyersList);
     }
   }, [orderProform.buyer]);
+
+  useEffect(() => {
+    const checkAuth = async () => {
+      const accessToken = localStorage.getItem("google_access_token");
+      const expiryTime = localStorage.getItem("google_token_expiry");
+  
+      if (!accessToken || !expiryTime) {
+        handleLogout();
+        return;
+      }
+  
+      const isExpiring = parseInt(expiryTime, 10) - Date.now() < 5 * 60 * 1000;
+      if (isExpiring) {
+        await refreshToken();
+      } else {
+        setToken(accessToken);
+      }
+    };
+  
+    checkAuth();
+    const interval = setInterval(checkAuth, 60 * 1000); // Каждую минуту
+    return () => clearInterval(interval);
+  }, []);
+  
 
   return (
     <>
@@ -1328,11 +1467,8 @@ function App() {
                             }));
                             setIsPopoverOpen(true);
                           }}
-                          onMouseDown={(e) => {
-                            e.preventDefault()
-                            setIsPopoverOpen(true)
-                          }}
-                          placeholder="Начните вводить название покупателя"
+                          onClick={() => setIsPopoverOpen(true)}
+                          placeholder="Введите название покупателя"
                         />
                       </div>
                     </PopoverTrigger>
@@ -1453,7 +1589,13 @@ function App() {
                 )}
                 <Button
                   onClick={() => submitOrder(token)}
-                  disabled={isSubmitting || !!iinError || !!bankAccountError}
+                  disabled={
+                    isSubmitting || 
+                    !!iinError || 
+                    !!bankAccountError ||
+                    !validateForm() ||
+                    (orderProform.orderType === "Накладная" && selectedItems.length === 0)
+                  }
                   className="w-1/2"
                 >
                   {isSubmitting ? "Отправка..." : "Оформить"}
@@ -1574,12 +1716,12 @@ function App() {
                               </span>
                             </p>
                           </div>
-                          <div className="flex items-center space-x-2">
-                            <div className="flex flex-col">
+                          <div className="flex items-end space-x-2">
+                            <div className="flex flex-col items-center">
                               <Label className="text-xs mb-1">Кол-во</Label>
                               <Input
                                 type="number"
-                                className="w-16 text-center"
+                                className="w-16 h-8 text-center"
                                 value={item.quantity}
                                 onChange={(e) =>
                                   updateQuantity(item.id, e.target.value)
@@ -1591,11 +1733,11 @@ function App() {
                                 }}
                               />
                             </div>
-                            <div className="flex flex-col">
+                            <div className="flex flex-col items-center">
                               <Label className="text-xs mb-1">Цена</Label>
                               <Input
                                 type="number"
-                                className="w-20 text-center"
+                                className="w-20 h-8 text-center"
                                 value={
                                   +(
                                     item.price *
