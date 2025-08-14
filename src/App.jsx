@@ -38,7 +38,6 @@ function App() {
     proformNumber: "",
     proformDate: "",
     costPrice: 0,
-    margin: 0,
     buyer: "",
     iin: "",
     bankAccount: "",
@@ -196,7 +195,7 @@ function App() {
   const totalSum = selectedItems.reduce((sum, item) => {
     return (
       sum +
-      Number((item.price * (1 + orderProform.margin / 100)).toFixed(2)) *
+      Number(item.price) *
         (Number(item.quantity) || 0)
     );
   }, 0);
@@ -345,7 +344,7 @@ function App() {
           item.name === "Доставка"
             ? item.price
             : (orderProform.orderType === "Накладная"
-                ? +(item.price * (1 + orderProform.margin / 100)).toFixed(2)
+                ? +(item.price)
                 : item.price) * item.quantity
         )
       );
@@ -367,16 +366,16 @@ function App() {
       items: itemsToUse.map((item) => ({
         name: item.name,
         price:
-          orderProform.orderType === "Накладная"
-            ? +(item.price * (1 + orderProform.margin / 100)).toFixed(2)
-            : item.price,
+          item.name !== "Доставка"
+            ? +(item.price)
+            : null,
         measure: item.measure,
         quantity: item.quantity,
         total: Math.round(
           item.name === "Доставка"
             ? item.price
             : (orderProform.orderType === "Накладная"
-                ? +(item.price * (1 + orderProform.margin / 100)).toFixed(2)
+                ? +(item.price)
                 : item.price) * item.quantity
         ),
       })),
@@ -1558,20 +1557,6 @@ function App() {
                 </div>
 
                 {orderProform.orderType === "Накладная" && (
-                  // <div>
-                  //   <Label htmlFor="margin">%</Label>
-                  //   <Input
-                  //     id="margin"
-                  //     type="text"
-                  //     value={orderProform.margin}
-                  //     onChange={(e) =>
-                  //       setOrderProform((prev) => ({
-                  //         ...prev,
-                  //         margin: e.target.value,
-                  //       }))
-                  //     }
-                  //   />
-                  // </div>
                   <div>
                     <Label htmlFor="margin">Себестоимость</Label>
                     <Input
@@ -1694,25 +1679,9 @@ function App() {
                           <div>
                             <h3 className="font-medium">{item.name}</h3>
                             <p>
-                              Цена:{" "}
-                              {Number(
-                                (
-                                  item.price *
-                                  (1 + orderProform.margin / 100)
-                                ).toFixed(2)
-                              )}{" "}
-                              сом × {item.quantity} =
+                              Цена:{" "} {Number(item.price)}{" "} сом × {item.quantity} =
                               <span className="font-bold">
-                                {" "}
-                                {(
-                                  Number(
-                                    (
-                                      item.price *
-                                      (1 + orderProform.margin / 100)
-                                    ).toFixed(2)
-                                  ) * item.quantity
-                                ).toFixed(2)}{" "}
-                                сом
+                                {" "}{(Number(item.price) * item.quantity)}{" "}сом
                               </span>
                             </p>
                           </div>
@@ -1739,10 +1708,7 @@ function App() {
                                 type="number"
                                 className="w-20 h-8 text-center"
                                 value={
-                                  +(
-                                    item.price *
-                                    (1 + orderProform.margin / 100)
-                                  ).toFixed(2)
+                                  +(item.price)
                                 }
                                 onChange={(e) => {
                                   const newPrice =
@@ -1753,8 +1719,7 @@ function App() {
                                         ? {
                                             ...i,
                                             price:
-                                              newPrice /
-                                              (1 + orderProform.margin / 100),
+                                              newPrice,
                                           }
                                         : i
                                     )

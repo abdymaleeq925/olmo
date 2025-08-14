@@ -51,7 +51,7 @@ export const materialData = [
   { id: 50, name: "Отвертка большая", measure: "шт" },
   { id: 51, name: "Отвертка маленькая", measure: "шт" },
   { id: 52, name: "Отвод 10S", measure: "шт" },
-  { id: 53, name: "Очки", measure: "шт" },
+  { id: 53, name: "Очки защитные", measure: "шт" },
   { id: 54, name: "Пена Homefix", measure: "шт" },
   { id: 55, name: "Пена клей Акфикс двухкомпонентный, 400гр", measure: "шт" },
   { id: 56, name: "Пенаплекс, 30мм", measure: "шт" },
@@ -99,7 +99,7 @@ export const materialData = [
   { id: 98, name: "Клей Dermax, 3.5кг", measure: "банка" },
   { id: 99, name: "Краскопульт", measure: "шт" },
   { id: 100, name: "Подвес 6х30", measure: "шт" },
-  { id: 101, name: "Профиль 6х60х27", measure: "шт" },
+  { id: 101, name: "Профиль 6х60х27", measure: "м" },
   { id: 102, name: "Пенаплекс, 50мм", measure: "шт" },
   { id: 103, name: "Хомут, 6х250мм", measure: "шт" },
   { id: 104, name: "Чашка алмазная, 180мм", measure: "шт" },
@@ -159,6 +159,9 @@ export const materialData = [
   { id: 158, name: "Силикон белый", measure: "шт" },
   { id: 159, name: "Диск отрезной по кафелю, 115мм", measure: "шт" },
   { id: 160, name: "Пена клей Акфикс, быстрая", measure: "шт" },
+  { id: 161, name: "Кабель ВВР, 5х16", measure: "м" },
+  { id: 162, name: "УШМ(Болгарка), 180мм", measure: "шт" },
+  { id: 163, name: "Шуруповерт", measure: "шт" },
 ];
 
 export const buyersList = [
