@@ -18,7 +18,7 @@ export const materialData = [
   { id: 17, name: "Диск отрезной по кафелю DEKO, 125мм", measure: "шт" },
   { id: 18, name: "Доставка", measure: "рейс" },
   { id: 19, name: "Вага мягкая, 3ка", measure: "пачка" },
-  { id: 20, name: "Затирка CE33 графитовый", measure: "кг" },
+  { id: 20, name: "Затирка CE33 графитовый, 2кг", measure: "пач" },
   { id: 21, name: "Затирка CE33 серый", measure: "кг" },
   { id: 22, name: "Затирка CE33 серый, 2кг", measure: "пач" },
   { id: 23, name: "Зонт 12х180", measure: "шт" },
@@ -87,7 +87,7 @@ export const materialData = [
   { id: 86, name: "Труба 10см, 2м", measure: "шт" },
   { id: 87, name: "Валик 5 в 1 Июхой, 100мм", measure: "шт" },
   { id: 88, name: "Валик Июхой, 220мм", measure: "шт" },
-  { id: 89, name: "Вилка кабельная", measure: "шт" },
+  { id: 89, name: "Вилка кабельная, черная", measure: "шт" },
   { id: 90, name: "Цемент М450, 50кг", measure: "меш" },
   { id: 91, name: "Шпатлевка AlinEX FINISH, 25кг(полимерная)", measure: "шт" },
   { id: 92, name: "Шпатлевка AlinEX GLATT, 25кг", measure: "шт" },
@@ -162,6 +162,14 @@ export const materialData = [
   { id: 161, name: "Кабель ВВР, 5х16", measure: "м" },
   { id: 162, name: "УШМ(Болгарка), 180мм", measure: "шт" },
   { id: 163, name: "Шуруповерт", measure: "шт" },
+  { id: 164, name: "Зажим СВП(Флажок), 1.5мм", measure: "пач" },
+  { id: 165, name: "Пена монтажная HOMEFIX", measure: "шт" },
+  { id: 166, name: "Головка для перфоратора большая Deko", measure: "шт" },
+  { id: 167, name: "Пена клей Акфикс, 960гр", measure: "шт" },
+  { id: 168, name: "Компрессор Deko", measure: "шт" },
+  { id: 169, name: "Дрель шуруповерт Deko", measure: "шт" },
+  { id: 170, name: "Кабель ВВГ, 5х16", measure: "м" },
+  { id: 171, name: "Сеткамак ВР4, 100х100мм", measure: "шт" },
 ];
 
 export const buyersList = [
@@ -169,13 +177,15 @@ export const buyersList = [
     name: "Артис Строй Констракшн",
     iin: "02511202010082",
     bankAccount: "1030220000191440",
-    bankName: 'ОАО "Коммерческий банк Кыргызстан"'
+    bankName: 'ОАО "Коммерческий банк Кыргызстан"',
+    constructions: ["Админ.здание по ул.Масалиева, 28","БЦ по ул.Сыдыкова,70"]
   },
   {
     name: "ОсОО 'Гетест'",
     iin: "00206200010016",
     bankAccount: "1091520103260189",
-    bankName: 'Филиал №4 Оптима Банк БИК 109015'
+    bankName: 'Филиал №4 Оптима Банк БИК 109015',
+    constructions: ["Test1","Test2"]
   }
 ]
   

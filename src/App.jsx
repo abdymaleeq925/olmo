@@ -25,7 +25,6 @@ import {
   SelectValue,
 } from "./components/ui/select";
 import { buyersList, materialData } from "./materialData";
-import "./App.css";
 import { useDebounce } from "use-debounce";
 
 function App() {
@@ -37,8 +36,8 @@ function App() {
     orderPeriodEnd: "",
     proformNumber: "",
     proformDate: "",
-    costPrice: 0,
     buyer: "",
+    constructionName: "",
     iin: "",
     bankAccount: "",
     bankName: "",
@@ -49,6 +48,7 @@ function App() {
   const [error, setError] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isPopoverOpen, setIsPopoverOpen] = useState(false);
+  const [isPopoverOpen2, setIsPopoverOpen2] = useState(false);
   const [filteredBuyers, setFilteredBuyers] = useState(buyersList);
   const [downloadUrl, setDownloadUrl] = useState("");
   const [iinError, setIinError] = useState("");
@@ -77,31 +77,38 @@ function App() {
     onSuccess: async (codeResponse) => {
       try {
         setIsLoading(true);
-    
-        const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/x-www-form-urlencoded",
-          },
-          body: new URLSearchParams({
-            code: codeResponse.code, // <-- Убедись, что есть .code
-            client_id: import.meta.env.VITE_CLIENT_ID,
-            client_secret: import.meta.env.VITE_CLIENT_SECRET,
-            redirect_uri: window.location.origin,
-            grant_type: "authorization_code",
-          }),
-        });
-    
+
+        const tokenResponse = await fetch(
+          "https://oauth2.googleapis.com/token",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/x-www-form-urlencoded",
+            },
+            body: new URLSearchParams({
+              code: codeResponse.code, // <-- Убедись, что есть .code
+              client_id: import.meta.env.VITE_CLIENT_ID,
+              client_secret: import.meta.env.VITE_CLIENT_SECRET,
+              redirect_uri: window.location.origin,
+              grant_type: "authorization_code",
+            }),
+          }
+        );
+
         const tokens = await tokenResponse.json();
-        if (!tokenResponse.ok) throw new Error(tokens.error || "Ошибка получения токенов");
-    
+        if (!tokenResponse.ok)
+          throw new Error(tokens.error || "Ошибка получения токенов");
+
         localStorage.setItem("google_access_token", tokens.access_token);
-        localStorage.setItem("google_refresh_token", tokens.refresh_token || "");
+        localStorage.setItem(
+          "google_refresh_token",
+          tokens.refresh_token || ""
+        );
         localStorage.setItem(
           "google_token_expiry",
           (Date.now() + tokens.expires_in * 1000).toString()
         );
-    
+
         setToken(tokens.access_token);
         setError(null);
       } catch (error) {
@@ -111,7 +118,7 @@ function App() {
       } finally {
         setIsLoading(false);
       }
-    },    
+    },
     onError: (errorResponse) => {
       setError(errorResponse.error || "Неизвестная ошибка");
       setIsLoading(false);
@@ -123,7 +130,7 @@ function App() {
     try {
       const refreshToken = localStorage.getItem("google_refresh_token");
       if (!refreshToken) throw new Error("No refresh token");
-  
+
       const response = await fetch("https://oauth2.googleapis.com/token", {
         method: "POST",
         headers: {
@@ -136,15 +143,17 @@ function App() {
           grant_type: "refresh_token",
         }),
       });
-  
+
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Ошибка обновления токена");
-  
+      if (!response.ok)
+        throw new Error(data.error || "Ошибка обновления токена");
+
       localStorage.setItem("google_access_token", data.access_token);
-      localStorage.setItem("google_token_expiry", 
-        (Date.now() + (data.expires_in * 1000)).toString()
+      localStorage.setItem(
+        "google_token_expiry",
+        (Date.now() + data.expires_in * 1000).toString()
       );
-  
+
       setToken(data.access_token);
       return data.access_token;
     } catch (error) {
@@ -193,15 +202,10 @@ function App() {
   };
 
   const totalSum = selectedItems.reduce((sum, item) => {
-    return (
-      sum +
-      Number(item.price) *
-        (Number(item.quantity) || 0)
-    );
+    return sum + Number(item.price) * (Number(item.quantity) || 0);
   }, 0);
 
   async function aggregateItemsFromPeriod(token, periodStart, periodEnd) {
-    // Получить все листы из файла "Артис Строй"
     const sheetsInfoResponse = await fetch(
       `https://sheets.googleapis.com/v4/spreadsheets/${
         import.meta.env.VITE_SPREADSHEET_ID
@@ -213,9 +217,7 @@ function App() {
     const sheetsInfo = await sheetsInfoResponse.json();
     if (!sheetsInfoResponse.ok) throw new Error(JSON.stringify(sheetsInfo));
 
-    // Фильтруем листы по дате в названии (с 8 по 17 символ, формат ДД.ММ.ГГГГ)
     function parseDate(str) {
-      // str: '01.01.2024' => Date
       const [d, m, y] = str.split(".");
       return new Date(`${y}-${m}-${d}T03:00:00`);
     }
@@ -248,7 +250,6 @@ function App() {
       for (let i = 0; i < data.values.length; i++) {
         const row = data.values[i];
         if ((row[1] || "").toLowerCase().includes("итого")) break;
-        // row: [name, measure, quantity, price, total]
         if (!row[0] || !row[3]) continue;
         allItems.push({
           name: row[0],
@@ -301,7 +302,7 @@ function App() {
   const submitOrder = async (token) => {
     let validToken = token;
     const expiryTime = localStorage.getItem("google_token_expiry");
-    
+
     if (!expiryTime || parseInt(expiryTime, 10) - Date.now() < 30000) {
       validToken = await refreshToken();
       if (!validToken) {
@@ -344,7 +345,7 @@ function App() {
           item.name === "Доставка"
             ? item.price
             : (orderProform.orderType === "Накладная"
-                ? +(item.price)
+                ? +item.price
                 : item.price) * item.quantity
         )
       );
@@ -362,20 +363,19 @@ function App() {
         .join(".")} г.`,
       orderDate: orderProform.proformDate.split("-").reverse().join("."),
       buyer: `Покупатель: ${orderProform.buyer} ИНН ${orderProform.iin}`,
+      constructionName: `Объект: ${orderProform.constructionName}`,
       bankAccount: `р/с ${orderProform.bankAccount} в ${orderProform.bankName}`,
       items: itemsToUse.map((item) => ({
         name: item.name,
-        price:
-          item.name !== "Доставка"
-            ? +(item.price)
-            : null,
+        price: item.name !== "Доставка" ? +item.price : null,
         measure: item.measure,
         quantity: item.quantity,
+        totalPriceCost: item.costPrice * item.quantity,
         total: Math.round(
           item.name === "Доставка"
             ? item.price
             : (orderProform.orderType === "Накладная"
-                ? +(item.price)
+                ? +item.price
                 : item.price) * item.quantity
         ),
       })),
@@ -440,6 +440,7 @@ function App() {
         item.measure,
         item.quantity,
         item.price,
+        item.totalPriceCost,
         item.total,
       ]);
 
@@ -447,7 +448,11 @@ function App() {
         (sum, item) => sum + item.total,
         0
       );
-      const totalRow = 9 + items.length;
+      const totalCostSumInDigits =orderData.items.reduce(
+        (sum, item) => sum + item.totalPriceCost,
+        0
+      );
+      const totalRow = 11 + items.length;
 
       // 3. Формируем все запросы на обновление
       const requests = [
@@ -512,6 +517,18 @@ function App() {
             mergeType: "MERGE_ALL",
           },
         },
+        {
+          mergeCells: {
+            range: {
+              sheetId,
+              startRowIndex: 7,
+              endRowIndex: 8,
+              startColumnIndex: 0,
+              endColumnIndex: 6,
+            },
+            mergeType: "MERGE_ALL",
+          },
+        },
         // Заполнение данных
         {
           updateCells: {
@@ -557,31 +574,32 @@ function App() {
                 values: [
                   {
                     userEnteredValue: {
-                      stringValue: "Поставщик: ИП Женишбек у.Ж. ИНН 22712200100929 р/с 1240040001978972"
+                      stringValue:
+                        "Поставщик: ИП Женишбек у.Ж. ИНН 22712200100929 р/с 1240040001978972",
                     },
                     userEnteredFormat: {
                       textFormat: {
                         fontFamily: "Times New Roman",
-                        fontSize: 12
+                        fontSize: 12,
                       },
-                      horizontalAlignment: "LEFT"
+                      horizontalAlignment: "LEFT",
                     },
                     textFormatRuns: [
                       {
                         startIndex: 0,
                         format: {
-                          bold: false
-                        }
+                          bold: false,
+                        },
                       },
                       {
                         startIndex: 10, // После "Поставщик: "
                         format: {
-                          bold: true
-                        }
-                      }
-                    ]
-                  }
-                ]
+                          bold: true,
+                        },
+                      },
+                    ],
+                  },
+                ],
               },
               {
                 values: [
@@ -618,8 +636,8 @@ function App() {
               {
                 values: [
                   {
-                    userEnteredValue: { 
-                      stringValue: orderData.buyer
+                    userEnteredValue: {
+                      stringValue: orderData.buyer,
                     },
                     userEnteredFormat: {
                       textFormat: {
@@ -633,16 +651,16 @@ function App() {
                       {
                         startIndex: 0,
                         format: {
-                          bold: false
-                        }
+                          bold: false,
+                        },
                       },
                       {
                         startIndex: 11,
                         format: {
-                          bold: true
-                        }
-                      }
-                    ]
+                          bold: true,
+                        },
+                      },
+                    ],
                   },
                 ],
               },
@@ -665,13 +683,59 @@ function App() {
             fields: "userEnteredValue,userEnteredFormat,textFormatRuns",
           },
         },
-        // Заголовки таблицы товаров
+        // Информация об объекте
         {
           updateCells: {
             range: {
               sheetId,
               startRowIndex: 7,
               endRowIndex: 8,
+              startColumnIndex: 0,
+              endColumnIndex: 6,
+            },
+            rows: [
+              {
+                values: [
+                  {
+                    userEnteredValue: {
+                      stringValue: orderData.constructionName,
+                    },
+                    userEnteredFormat: {
+                      textFormat: {
+                        bold: false,
+                        fontFamily: "Times New Roman",
+                        fontSize: 12,
+                      },
+                      horizontalAlignment: "LEFT",
+                    },
+                    textFormatRuns: [
+                      {
+                        startIndex: 0,
+                        format: {
+                          bold: false,
+                        },
+                      },
+                      {
+                        startIndex: 7,
+                        format: {
+                          bold: true,
+                        },
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+            fields: "userEnteredValue,userEnteredFormat,textFormatRuns",
+          },
+        },
+        // Заголовки таблицы товаров
+        {
+          updateCells: {
+            range: {
+              sheetId,
+              startRowIndex: 9,
+              endRowIndex: 10,
               startColumnIndex: 0,
               endColumnIndex: 6,
             },
@@ -755,8 +819,8 @@ function App() {
           updateCells: {
             range: {
               sheetId,
-              startRowIndex: 8,
-              endRowIndex: 8 + orderData.items.length,
+              startRowIndex: 10,
+              endRowIndex: 10 + orderData.items.length,
               startColumnIndex: 0,
               endColumnIndex: 6,
             },
@@ -808,10 +872,10 @@ function App() {
                   userEnteredFormat: {
                     textFormat: { fontFamily: "Times New Roman", fontSize: 12 },
                     horizontalAlignment: "CENTER",
-                    numberFormat: { 
-                      type: "NUMBER", 
-                      pattern: "# ##0"
-                    }
+                    numberFormat: {
+                      type: "NUMBER",
+                      pattern: "# ##0",
+                    },
                   },
                 },
               ],
@@ -865,10 +929,10 @@ function App() {
                         fontSize: 12,
                       },
                       horizontalAlignment: "RIGHT",
-                      numberFormat: { 
-                        type: "NUMBER", 
-                        pattern: "# ##0\" сом\""
-                      }
+                      numberFormat: {
+                        type: "NUMBER",
+                        pattern: '# ##0" сом"',
+                      },
                     },
                   },
                   {},
@@ -1095,8 +1159,8 @@ function App() {
           updateBorders: {
             range: {
               sheetId,
-              startRowIndex: 7,
-              endRowIndex: 8 + items.length + 1,
+              startRowIndex: 9,
+              endRowIndex: 10 + items.length + 1,
               startColumnIndex: 0,
               endColumnIndex: 6,
             },
@@ -1149,14 +1213,20 @@ function App() {
         if (!proformListResponse.ok)
           throw new Error(JSON.stringify(proformListData));
 
-        const nextRow = orderProform.orderType === "Накладная" ? Math.max(6, (proformListData.values?.length || 5) + 1) : Math.max(4, (proformListData.values?.length || 3) + 1);
+        const nextRow =
+          orderProform.orderType === "Накладная"
+            ? Math.max(6, (proformListData.values?.length || 5) + 1)
+            : Math.max(4, (proformListData.values?.length || 3) + 1);
         const proformListRowData = [
           nextRow - 2,
           `№${orderProform.proformNumber}`,
-          (orderProform.proformDate || orderProform.orderPeriodEnd).split("-").reverse().join("."),
+          (orderProform.proformDate || orderProform.orderPeriodEnd)
+            .split("-")
+            .reverse()
+            .join("."),
           totalSumInDigits.toString(),
-          orderProform.costPrice,
-          totalSumInDigits-orderProform.costPrice,
+          totalCostSumInDigits,
+          totalSumInDigits - totalCostSumInDigits,
           orderProform.buyer,
         ];
 
@@ -1266,7 +1336,9 @@ function App() {
             ? import.meta.env.VITE_SPREADSHEET_ID
             : import.meta.env.VITE_PERIOD_SPREADSHEET_ID
         }/edit#gid=${sheetId}`,
-        fileName: `${orderProform.buyer} - №${orderProform.proformNumber} от ${orderProform.proformDate || orderProform.orderPeriodEnd}.xlsx`
+        fileName: `${orderProform.buyer} - №${orderProform.proformNumber} от ${
+          orderProform.proformDate || orderProform.orderPeriodEnd
+        }.xlsx`,
       };
     } catch (error) {
       console.error("Error creating order sheet:", error);
@@ -1284,14 +1356,17 @@ function App() {
       bankName: orderProform.bankName.trim() !== "",
       proformNumber: orderProform.proformNumber.trim() !== "",
     };
-  
+
     if (orderProform.orderType === "Накладная") {
       requiredFields.proformDate = orderProform.proformDate.trim() !== "";
+      requiredFields.constructionName =
+        orderProform.constructionName.trim() !== "";
     } else {
-      requiredFields.orderPeriodStart = orderProform.orderPeriodStart.trim() !== "";
+      requiredFields.orderPeriodStart =
+        orderProform.orderPeriodStart.trim() !== "";
       requiredFields.orderPeriodEnd = orderProform.orderPeriodEnd.trim() !== "";
     }
-  
+
     return Object.values(requiredFields).every(Boolean);
   };
 
@@ -1330,12 +1405,12 @@ function App() {
     const checkAuth = async () => {
       const accessToken = localStorage.getItem("google_access_token");
       const expiryTime = localStorage.getItem("google_token_expiry");
-  
+
       if (!accessToken || !expiryTime) {
         handleLogout();
         return;
       }
-  
+
       const isExpiring = parseInt(expiryTime, 10) - Date.now() < 5 * 60 * 1000;
       if (isExpiring) {
         await refreshToken();
@@ -1343,12 +1418,11 @@ function App() {
         setToken(accessToken);
       }
     };
-  
+
     checkAuth();
     const interval = setInterval(checkAuth, 60 * 1000); // Каждую минуту
     return () => clearInterval(interval);
   }, []);
-  
 
   return (
     <>
@@ -1471,7 +1545,11 @@ function App() {
                         />
                       </div>
                     </PopoverTrigger>
-                    <PopoverContent className="w-[400px] p-4" align="start" onOpenAutoFocus={(e) => e.preventDefault()}>
+                    <PopoverContent
+                      className="p-4"
+                      align="start"
+                      onOpenAutoFocus={(e) => e.preventDefault()}
+                    >
                       {filteredBuyers.length > 0 && (
                         <div className="space-y-2">
                           {filteredBuyers.map((buyer) => (
@@ -1489,10 +1567,7 @@ function App() {
                                 setIsPopoverOpen(false);
                               }}
                             >
-                              <div className="font-medium">{buyer.name}</div>
-                              <div className="text-sm text-gray-500">
-                                {buyer.bankName}, {buyer.bankAccount}
-                              </div>
+                              <span className="text-md">{buyer.name}</span>
                             </div>
                           ))}
                         </div>
@@ -1555,31 +1630,75 @@ function App() {
                     }
                   />
                 </div>
-
-                {orderProform.orderType === "Накладная" && (
+                {(orderProform.orderType === "Накладная" && orderProform.buyer.length > 0) && (
                   <div>
-                    <Label htmlFor="margin">Себестоимость</Label>
-                    <Input
-                      id="margin"
-                      type="number"
-                      value={orderProform.costPrice}
-                      onChange={(e) =>
-                        setOrderProform((prev) => ({
-                          ...prev,
-                          costPrice: e.target.value,
-                        }))
-                      }
-                    />
+                    <Label htmlFor="constructionName">Название объекта</Label>
+                    <Popover
+                      open={isPopoverOpen2}
+                      onOpenChange={setIsPopoverOpen2}
+                    >
+                      <PopoverTrigger asChild>
+                        <div>
+                          <Input
+                            id="constructionName"
+                            type="text"
+                            value={orderProform.constructionName}
+                            onChange={(e) => {
+                              setOrderProform((prev) => ({
+                                ...prev,
+                                constructionName: e.target.value,
+                              }));
+                              setIsPopoverOpen2(true);
+                            }}
+                            onClick={() => setIsPopoverOpen2(true)}
+                            placeholder="Введите название объекта"
+                          />
+                        </div>
+                      </PopoverTrigger>
+                      <PopoverContent
+                        className="p-4"
+                        align="start"
+                        onOpenAutoFocus={(e) => e.preventDefault()}
+                      >
+                        {orderProform.buyer.length > 0 && (
+                          <div className="space-y-2">
+                            {buyersList
+                              .find(
+                                (potential) =>
+                                  orderProform.buyer === potential.name
+                              )
+                              ?.constructions?.map((construction) => (
+                                <div
+                                  key={construction}
+                                  className="p-2 hover:bg-gray-100 rounded cursor-pointer"
+                                  onClick={() => {
+                                    setOrderProform((prev) => ({
+                                      ...prev,
+                                      constructionName: construction,
+                                    }));
+                                    setIsPopoverOpen2(false);
+                                  }}
+                                >
+                                  <span className="text-sm">
+                                    {construction}
+                                  </span>
+                                </div>
+                              ))}
+                          </div>
+                        )}
+                      </PopoverContent>
+                    </Popover>
                   </div>
                 )}
                 <Button
                   onClick={() => submitOrder(token)}
                   disabled={
-                    isSubmitting || 
-                    !!iinError || 
+                    isSubmitting ||
+                    !!iinError ||
                     !!bankAccountError ||
                     !validateForm() ||
-                    (orderProform.orderType === "Накладная" && selectedItems.length === 0)
+                    (orderProform.orderType === "Накладная" &&
+                      selectedItems.length === 0)
                   }
                   className="w-1/2"
                 >
@@ -1679,9 +1798,10 @@ function App() {
                           <div>
                             <h3 className="font-medium">{item.name}</h3>
                             <p>
-                              Цена:{" "} {Number(item.price)}{" "} сом × {item.quantity} =
+                              Цена: {Number(item.price)} сом × {item.quantity} =
                               <span className="font-bold">
-                                {" "}{(Number(item.price) * item.quantity)}{" "}сом
+                                {" "}
+                                {Number(item.price) * item.quantity} сом
                               </span>
                             </p>
                           </div>
@@ -1707,9 +1827,7 @@ function App() {
                               <Input
                                 type="number"
                                 className="w-20 h-8 text-center"
-                                value={
-                                  +(item.price)
-                                }
+                                value={+item.price}
                                 onChange={(e) => {
                                   const newPrice =
                                     parseFloat(e.target.value) || 0;
@@ -1718,8 +1836,29 @@ function App() {
                                       i.id === item.id
                                         ? {
                                             ...i,
-                                            price:
-                                              newPrice,
+                                            price: newPrice,
+                                          }
+                                        : i
+                                    )
+                                  );
+                                }}
+                              />
+                            </div>
+                            <div className="flex flex-col items-center">
+                              <Label className="text-xs mb-1">Себестоимость</Label>
+                              <Input
+                                type="number"
+                                className="w-20 h-8 text-center"
+                                value={+item.costPrice}
+                                onChange={(e) => {
+                                  const newPrice =
+                                    parseFloat(e.target.value) || 0;
+                                  setSelectedItems(
+                                    selectedItems.map((i) =>
+                                      i.id === item.id
+                                        ? {
+                                            ...i,
+                                            costPrice: newPrice,
                                           }
                                         : i
                                     )
