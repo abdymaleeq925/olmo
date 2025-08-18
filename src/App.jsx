@@ -24,7 +24,7 @@ import {
   SelectItem,
   SelectValue,
 } from "./components/ui/select";
-import { buyersList, materialData } from "./materialData";
+import { buyersList, materialData, sortMaterials } from "./materialData";
 import { useDebounce } from "use-debounce";
 
 function App() {
@@ -55,6 +55,9 @@ function App() {
   const [bankAccountError, setBankAccountError] = useState("");
   const [debouncedIin] = useDebounce(orderProform.iin, 1000);
   const [debouncedBankAccount] = useDebounce(orderProform.bankAccount, 1000);
+
+  // const sortedData = sortMaterials(materialData);
+  // console.log("sortedData",sortedData);
 
   useEffect(() => {
     const cachedToken = localStorage.getItem("google_sheets_token");
@@ -202,7 +205,7 @@ function App() {
   };
 
   const totalSum = selectedItems.reduce((sum, item) => {
-    return sum + Number(item.price) * (Number(item.quantity) || 0);
+    return sum + (item.name !== "Доставка" ? Number(item.price) * Number(item.quantity) : Number(item.price)) || 0;
   }, 0);
 
   async function aggregateItemsFromPeriod(token, periodStart, periodEnd) {
@@ -342,11 +345,9 @@ function App() {
       return (
         sum +
         Math.round(
-          item.name === "Доставка"
-            ? item.price
-            : (orderProform.orderType === "Накладная"
-                ? +item.price
-                : item.price) * item.quantity
+          orderProform.orderType === "Накладная"
+                ? (item.name === "Доставка" ? +item.price
+                : item.price * item.quantity) : item.price * item.quantity 
         )
       );
     }, 0);
@@ -370,13 +371,11 @@ function App() {
         price: item.name !== "Доставка" ? +item.price : null,
         measure: item.measure,
         quantity: item.quantity,
-        totalPriceCost: item.costPrice * item.quantity,
+        totalPriceCost: item.name !== "Доставка" ? item.costPrice * item.quantity : item.price,
         total: Math.round(
-          item.name === "Доставка"
-            ? item.price
-            : (orderProform.orderType === "Накладная"
-                ? +item.price
-                : item.price) * item.quantity
+          orderProform.orderType === "Накладная"
+                ? (item.name === "Доставка" ? +item.price
+                : item.price * item.quantity) : item.price * item.quantity 
         ),
       })),
       totalSum: `Итого к оплате: ${convertNumberToWordsRu(
@@ -448,10 +447,12 @@ function App() {
         (sum, item) => sum + item.total,
         0
       );
-      const totalCostSumInDigits =orderData.items.reduce(
-        (sum, item) => sum + item.totalPriceCost,
+
+      const totalCostSumInDigits = orderData.items.reduce(
+        (sum, item) => sum + (item.name !== "Доставка" ? item.totalPriceCost : 0),
         0
       );
+
       const totalRow = 11 + items.length;
 
       // 3. Формируем все запросы на обновление
@@ -1217,6 +1218,7 @@ function App() {
           orderProform.orderType === "Накладная"
             ? Math.max(6, (proformListData.values?.length || 5) + 1)
             : Math.max(4, (proformListData.values?.length || 3) + 1);
+            
         const proformListRowData = [
           nextRow - 2,
           `№${orderProform.proformNumber}`,
@@ -1224,7 +1226,7 @@ function App() {
             .split("-")
             .reverse()
             .join("."),
-          totalSumInDigits.toString(),
+          totalSumInDigits,
           totalCostSumInDigits,
           totalSumInDigits - totalCostSumInDigits,
           orderProform.buyer,
@@ -1798,11 +1800,16 @@ function App() {
                           <div>
                             <h3 className="font-medium">{item.name}</h3>
                             <p>
-                              Цена: {Number(item.price)} сом × {item.quantity} =
-                              <span className="font-bold">
-                                {" "}
-                                {Number(item.price) * item.quantity} сом
-                              </span>
+                              Цена: {item.name !== "Доставка" ? (
+                                <>
+                                {Number(item.price)} сом × {item.quantity} =
+                                <span className="font-bold">
+                                  {" "}
+                                  {Number(item.price) * item.quantity} сом
+                                </span>
+                                </>
+                              ) : <span className="font-bold">{item.price} сом</span>}
+                              
                             </p>
                           </div>
                           <div className="flex items-end space-x-2">
@@ -1844,28 +1851,30 @@ function App() {
                                 }}
                               />
                             </div>
-                            <div className="flex flex-col items-center">
-                              <Label className="text-xs mb-1">Себестоимость</Label>
-                              <Input
-                                type="number"
-                                className="w-20 h-8 text-center"
-                                value={+item.costPrice}
-                                onChange={(e) => {
-                                  const newPrice =
-                                    parseFloat(e.target.value) || 0;
-                                  setSelectedItems(
-                                    selectedItems.map((i) =>
-                                      i.id === item.id
-                                        ? {
-                                            ...i,
-                                            costPrice: newPrice,
-                                          }
-                                        : i
-                                    )
-                                  );
-                                }}
-                              />
-                            </div>
+                            { item.name !== "Доставка" && (
+                              <div className="flex flex-col items-center">
+                                <Label className="text-xs mb-1">Себестоимость</Label>
+                                <Input
+                                  type="number"
+                                  className="w-20 h-8 text-center"
+                                  value={+item.costPrice}
+                                  onChange={(e) => {
+                                    const newPrice =
+                                      parseFloat(e.target.value) || 0;
+                                    setSelectedItems(
+                                      selectedItems.map((i) =>
+                                        i.id === item.id
+                                          ? {
+                                              ...i,
+                                              costPrice: newPrice,
+                                            }
+                                          : i
+                                      )
+                                    );
+                                  }}
+                                />
+                              </div>
+                            )}
                             <Button
                               variant="destructive"
                               size="sm"
