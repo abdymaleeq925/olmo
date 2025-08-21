@@ -43,33 +43,33 @@ function App() {
     bankName: "",
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [submissionStatus, setSubmissionStatus] = useState("");
+  const [submissionStatus, setSubmissionStatus] = useState(null);
   const [open, setOpen] = useState(false);
   const [error, setError] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isPopoverOpen, setIsPopoverOpen] = useState(false);
   const [isPopoverOpen2, setIsPopoverOpen2] = useState(false);
   const [filteredBuyers, setFilteredBuyers] = useState(buyersList);
-  const [downloadUrl, setDownloadUrl] = useState("");
-  const [iinError, setIinError] = useState("");
-  const [bankAccountError, setBankAccountError] = useState("");
+  const [downloadUrl, setDownloadUrl] = useState(null);
+  const [iinError, setIinError] = useState(null);
+  const [bankAccountError, setBankAccountError] = useState(null);
   const [debouncedIin] = useDebounce(orderProform.iin, 1000);
   const [debouncedBankAccount] = useDebounce(orderProform.bankAccount, 1000);
 
-  // const sortedData = sortMaterials(materialData);
-  // console.log("sortedData",sortedData);
+  const sortedData = sortMaterials(materialData);
+  console.log("sortedData",sortedData);
 
   useEffect(() => {
-    const cachedToken = localStorage.getItem("google_sheets_token");
-    const cachedTime = localStorage.getItem("google_sheets_token_time");
+    const cachedToken = localStorage.getItem("google_access_token");
+    const cachedTime = localStorage.getItem("google_token_expiry");
     if (cachedToken && cachedTime) {
       const now = Date.now();
       const tokenTime = parseInt(cachedTime, 10);
       if (now - tokenTime < 43200000) {
         setToken(cachedToken);
       } else {
-        localStorage.removeItem("google_sheets_token");
-        localStorage.removeItem("google_sheets_token_time");
+        localStorage.removeItem("google_access_token");
+        localStorage.removeItem("google_token_expiry");
       }
     }
   }, []);
@@ -89,7 +89,7 @@ function App() {
               "Content-Type": "application/x-www-form-urlencoded",
             },
             body: new URLSearchParams({
-              code: codeResponse.code, // <-- Убедись, что есть .code
+              code: codeResponse.code,
               client_id: import.meta.env.VITE_CLIENT_ID,
               client_secret: import.meta.env.VITE_CLIENT_SECRET,
               redirect_uri: window.location.origin,
@@ -237,6 +237,37 @@ function App() {
       return date >= start && date <= end;
     });
 
+    let totalPriceCost = 0;
+
+    try {
+      const proformRecords = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${import.meta.env.VITE_PROFORM_RECORDS_ID}/values/Реестр!C3:G1000`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
+
+      const proformRecordsData = await proformRecords.json();
+
+      if(proformRecordsData.values) {
+        for(const row of proformRecordsData.values) {
+          if(row[0] && row[2]) {
+            if (/^\d{2}\.\d{2}\.\d{4}$/.test(row[0])) {
+              const rowDate = parseDate(row[0]);
+              if (rowDate >= start && rowDate <= end && row[4] === orderProform.buyer) {
+                const price = Number(row[2].replace(/\s/g, ''));
+                if (!isNaN(price)) {
+                  totalPriceCost += price;
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch (error) {
+        console.error('Ошибка при получении данных из реестра:', error);
+    }
+
     // Собираем товары со всех листов
     let allItems = [];
     for (const sheet of filteredSheets) {
@@ -245,23 +276,24 @@ function App() {
       const dataResp = await fetch(
         `https://sheets.googleapis.com/v4/spreadsheets/${
           import.meta.env.VITE_SPREADSHEET_ID
-        }/values/'${encodeURIComponent(title)}'!B9:F1000`,
+        }/values/'${encodeURIComponent(title)}'!B11:F1000`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
       const data = await dataResp.json();
       if (!data.values) continue;
       for (let i = 0; i < data.values.length; i++) {
         const row = data.values[i];
-        if ((row[1] || "").toLowerCase().includes("итого")) break;
-        if (!row[0] || !row[3]) continue;
+        if (row[0] === "Итого") break;
+        // if (!row[0] || !row[3]) continue;
         allItems.push({
           name: row[0],
           measure: row[1] || "",
           quantity: Number(row[2]) || 0,
-          price: Number(row[3]) || 0,
+          price: row[0] !== "Доставка" ? Number(row[3]) : Number(String(row[4]).replace(/\s/g, "")),
         });
       }
     }
+
     // Объединяем одинаковые товары с одинаковой ценой
     const mergedMap = new Map();
     let deliveryItem = null;
@@ -299,10 +331,11 @@ function App() {
       merged.push(deliveryItem);
     }
 
-    return merged;
+    return {merged: merged, totalPriceCost: totalPriceCost};
   }
 
   const submitOrder = async (token) => {
+    setError(null);
     let validToken = token;
     const expiryTime = localStorage.getItem("google_token_expiry");
 
@@ -341,13 +374,13 @@ function App() {
       }
     }
 
-    const totalSum = itemsToUse.reduce((sum, item) => {
+    const totalSum = (orderProform.orderType === "Накладная" ? itemsToUse : itemsToUse.merged).reduce((sum, item) => {
       return (
         sum +
         Math.round(
           orderProform.orderType === "Накладная"
                 ? (item.name === "Доставка" ? +item.price
-                : item.price * item.quantity) : item.price * item.quantity 
+                : item.price * item.quantity) : (item.name !== "Доставка" ? (item.price * item.quantity) : item.price)
         )
       );
     }, 0);
@@ -364,20 +397,21 @@ function App() {
         .join(".")} г.`,
       orderDate: orderProform.proformDate.split("-").reverse().join("."),
       buyer: `Покупатель: ${orderProform.buyer} ИНН ${orderProform.iin}`,
-      constructionName: `Объект: ${orderProform.constructionName}`,
+      constructionName: orderProform.orderType === "Накладная" ? `Объект: ${orderProform.constructionName}` : "",
       bankAccount: `р/с ${orderProform.bankAccount} в ${orderProform.bankName}`,
-      items: itemsToUse.map((item) => ({
+      items: (orderProform.orderType === "Накладная" ? itemsToUse : itemsToUse.merged).map((item) => ({
         name: item.name,
         price: item.name !== "Доставка" ? +item.price : null,
         measure: item.measure,
         quantity: item.quantity,
-        totalPriceCost: item.name !== "Доставка" ? item.costPrice * item.quantity : item.price,
+        totalPriceCost: orderProform.orderType === "Накладная" ? (item.name !== "Доставка" ? item.costPrice * item.quantity : item.price) : 0,
         total: Math.round(
           orderProform.orderType === "Накладная"
                 ? (item.name === "Доставка" ? +item.price
-                : item.price * item.quantity) : item.price * item.quantity 
+                : item.price * item.quantity) : (item.name !== "Доставка" ? (item.price * item.quantity) : item.price)
         ),
       })),
+      totalPriceCost: orderProform.orderType !== "Накладная" ? itemsToUse.totalPriceCost : null,
       totalSum: `Итого к оплате: ${convertNumberToWordsRu(
         Math.round(totalSum),
         {
@@ -429,6 +463,7 @@ function App() {
       );
 
       const createResult = await createResponse.json();
+      
       if (!createResponse.ok) throw new Error(JSON.stringify(createResult));
       const sheetId = createResult.replies[0].addSheet.properties.sheetId;
 
@@ -448,12 +483,12 @@ function App() {
         0
       );
 
-      const totalCostSumInDigits = orderData.items.reduce(
+      const totalCostSumInDigits = orderProform.orderType !== "Накладная" ? itemsToUse.totalPriceCost : (orderData.items.reduce(
         (sum, item) => sum + (item.name !== "Доставка" ? item.totalPriceCost : 0),
         0
-      );
+      ));
 
-      const totalRow = 11 + items.length;
+      const totalRow = orderProform.orderType === "Накладная" ? (11 + items.length) : (9 + items.length);
 
       // 3. Формируем все запросы на обновление
       const requests = [
@@ -518,7 +553,7 @@ function App() {
             mergeType: "MERGE_ALL",
           },
         },
-        {
+        ...(orderProform.orderType === "Накладная" ? [{
           mergeCells: {
             range: {
               sheetId,
@@ -529,7 +564,7 @@ function App() {
             },
             mergeType: "MERGE_ALL",
           },
-        },
+        }] : []),
         // Заполнение данных
         {
           updateCells: {
@@ -685,7 +720,7 @@ function App() {
           },
         },
         // Информация об объекте
-        {
+        ...(orderProform.orderType === "Накладная" ? [{
           updateCells: {
             range: {
               sheetId,
@@ -729,14 +764,14 @@ function App() {
             ],
             fields: "userEnteredValue,userEnteredFormat,textFormatRuns",
           },
-        },
+        }] : []),
         // Заголовки таблицы товаров
         {
           updateCells: {
             range: {
               sheetId,
-              startRowIndex: 9,
-              endRowIndex: 10,
+              startRowIndex: orderProform.orderType === "Накладная" ? 9 : 7,
+              endRowIndex: orderProform.orderType === "Накладная" ? 10 : 8,
               startColumnIndex: 0,
               endColumnIndex: 6,
             },
@@ -820,8 +855,8 @@ function App() {
           updateCells: {
             range: {
               sheetId,
-              startRowIndex: 10,
-              endRowIndex: 10 + orderData.items.length,
+              startRowIndex: orderProform.orderType === "Накладная" ? 10 : 8,
+              endRowIndex: orderProform.orderType === "Накладная" ? (10 + orderData.items.length) : (8 + orderData.items.length),
               startColumnIndex: 0,
               endColumnIndex: 6,
             },
@@ -1160,8 +1195,8 @@ function App() {
           updateBorders: {
             range: {
               sheetId,
-              startRowIndex: 9,
-              endRowIndex: 10 + items.length + 1,
+              startRowIndex: orderProform.orderType === "Накладная" ? 9 : 7,
+              endRowIndex: orderProform.orderType === "Накладная" ? (10 + items.length + 1) : (8 + items.length + 1),
               startColumnIndex: 0,
               endColumnIndex: 6,
             },
@@ -1344,6 +1379,10 @@ function App() {
       };
     } catch (error) {
       console.error("Error creating order sheet:", error);
+      const errorData = JSON.parse(error.message);
+      if (errorData.error?.message?.includes('already exists')) {
+        setError("Лист с таким названием уже существует. Пожалуйста, измените название и попробуйте снова.");
+      }
       throw error;
     } finally {
       setIsSubmitting(false);
@@ -1440,12 +1479,14 @@ function App() {
               <Label htmlFor="orderType">Тип документа</Label>
               <Select
                 value={orderProform.orderType}
-                onValueChange={(value) =>
+                onValueChange={(value) => {
                   setOrderProform((prev) => ({
                     ...prev,
                     orderType: value,
                   }))
-                }
+                  setSubmissionStatus(null);
+                  setDownloadUrl(null)
+                }}
               >
                 <SelectTrigger className="w-1/3">
                   <SelectValue />
@@ -1707,6 +1748,11 @@ function App() {
                   {isSubmitting ? "Отправка..." : "Оформить"}
                 </Button>
               </div>
+              {
+                error && (
+                  <span className="text-red-500">{error}</span>
+                )
+              }
               {submissionStatus && (
                 <div>
                   <img
