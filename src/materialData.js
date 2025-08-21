@@ -121,7 +121,7 @@ export const materialData = [
   },
   {
     id: 25,
-    name: "Гвозди жидкие, Akfix",
+    name: "Гвозди жидкие Akfix 310",
     measure: "шт",
   },
   {
@@ -137,7 +137,7 @@ export const materialData = [
   {
     id: 28,
     name: "Гидроизоляция, 10кг",
-    measure: "в",
+    measure: "вед",
   },
   {
     id: 29,
@@ -396,17 +396,17 @@ export const materialData = [
   },
   {
     id: 80,
-    name: "Кисточка, 2см",
+    name: "Кисточка малярная Biber, 2см",
     measure: "шт",
   },
   {
     id: 81,
-    name: "Кисточка, 3см",
+    name: "Кисточка малярная Biber, 3см",
     measure: "шт",
   },
   {
     id: 82,
-    name: "Кисточка, 5см",
+    name: "Кисточка малярная Biber, 5см",
     measure: "шт",
   },
   {
@@ -496,7 +496,7 @@ export const materialData = [
   },
   {
     id: 100,
-    name: "Лезвие",
+    name: "Лезвие для канцелярского ножа Alion, 10шт",
     measure: "пач",
   },
   {
@@ -1089,6 +1089,26 @@ export const materialData = [
     name: "Электроды УОНИ, 4мм",
     measure: "пач",
   },
+  {
+    id: 219,
+    name: "Плинтус Н80, 7х2000мм",
+    measure: "шт",
+  },
+  {
+    id: 220,
+    name: "Каска строительная, белая",
+    measure: "шт",
+  },
+  {
+    id: 221,
+    name: "Саморез Krepmax, 4.2х13мм",
+    measure: "пач",
+  },
+  {
+    id: 222,
+    name: "ОСП, 12х125х250мм",
+    measure: "шт",
+  },
 ];
 
 export const buyersList = [
@@ -1104,7 +1124,14 @@ export const buyersList = [
     iin: "00206200010016",
     bankAccount: "1091520103260189",
     bankName: "Филиал №4 Оптима Банк БИК 109015",
-    constructions: ["Test1", "Test2"],
+    constructions: ["Панфилова 92А", "Test2"],
+  },
+  {
+    name: "ОсОО 'СК Оптима'",
+    iin: "02904199210026",
+    bankAccount: "1090800015300173",
+    bankName: "Филиал №1 Оптима Банк БИК 109008",
+    constructions: ["Малдыбаева 279", "Test2"],
   },
 ];
 

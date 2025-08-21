@@ -56,8 +56,8 @@ function App() {
   const [debouncedIin] = useDebounce(orderProform.iin, 1000);
   const [debouncedBankAccount] = useDebounce(orderProform.bankAccount, 1000);
 
-  const sortedData = sortMaterials(materialData);
-  console.log("sortedData",sortedData);
+  // const sortedData = sortMaterials(materialData);
+  // console.log("sortedData",sortedData);
 
   useEffect(() => {
     const cachedToken = localStorage.getItem("google_access_token");
@@ -1468,13 +1468,13 @@ function App() {
   return (
     <>
       {token ? (
-        <div className="container mx-auto p-4 mb-6 flex flex-col items-normal md:items-center">
+        <div className="container mx-auto p-4 mb-6 flex flex-col items-center">
           <div className="w-full flex justify-end mb-2">
             <Button variant="outline" onClick={handleLogout}>
               Выйти
             </Button>
           </div>
-          <Card className="flex justify-between">
+          <Card className="flex justify-between w-[66%] md:w-1/2">
             <CardHeader className="w-full md:w-[700px]">
               <Label htmlFor="orderType">Тип документа</Label>
               <Select
@@ -1782,23 +1782,22 @@ function App() {
 
           {orderProform.orderType === "Накладная" && (
             <>
-              <div className="my-6 w-1/3">
-                <CardHeader>
+              <div className="my-6 w-full flex flex-col items-center md:w-1/3">
+                <CardHeader className="w-[34%] md:w-full">
                   <CardTitle>Добавление товаров</CardTitle>
                 </CardHeader>
-                <CardContent>
+                <CardContent className="w-full">
                   <div className="mb-4">
                     <Label htmlFor="search">Поиск товаров</Label>
                     <Popover
                       open={open}
                       onOpenChange={setOpen}
-                      className="w-[500px]]"
                     >
                       <PopoverTrigger asChild>
                         <Button
                           variant="outline"
                           role="combobox"
-                          className="w-[400px] md:w-[450px] justify-between"
+                          className="w-[400px] md:w-full justify-between"
                         >
                           {selectedItems
                             ? selectedItems.name
