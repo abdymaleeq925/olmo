@@ -205,10 +205,20 @@ function App() {
   };
 
   const totalSum = selectedItems.reduce((sum, item) => {
-    return sum + (item.name !== "Доставка" ? Number(item.price) * Number(item.quantity) : Number(item.price)) || 0;
+    return (
+      sum +
+        (item.name !== "Доставка"
+          ? Number(item.price) * Number(item.quantity)
+          : Number(item.price)) || 0
+    );
   }, 0);
 
-  async function aggregateItemsFromPeriod(token, periodStart, periodEnd) {
+  async function aggregateItemsFromPeriod(
+    token,
+    periodStart,
+    periodEnd,
+    buyerName
+  ) {
     const sheetsInfoResponse = await fetch(
       `https://sheets.googleapis.com/v4/spreadsheets/${
         import.meta.env.VITE_SPREADSHEET_ID
@@ -227,6 +237,20 @@ function App() {
     const start = parseDate(periodStart);
     const end = parseDate(periodEnd);
 
+    function extractBuyerName(buyerString) {
+      if (!buyerString) return null;
+
+      // Убираем префикс "Покупатель: "
+      const withoutPrefix = buyerString.replace("Покупатель: ", "");
+
+      // Ищем позицию "ИНН" для разделения
+      const innIndex = withoutPrefix.indexOf("ИНН");
+      if (innIndex === -1) return withoutPrefix.trim();
+
+      // Берем часть до "ИНН" и убираем лишние пробелы
+      return withoutPrefix.substring(0, innIndex).trim();
+    }
+
     const filteredSheets = sheetsInfo.sheets.filter((sheet) => {
       const title = sheet.properties.title;
       if (title.length < 17) return false;
@@ -241,7 +265,9 @@ function App() {
 
     try {
       const proformRecords = await fetch(
-        `https://sheets.googleapis.com/v4/spreadsheets/${import.meta.env.VITE_PROFORM_RECORDS_ID}/values/Реестр!C3:G1000`,
+        `https://sheets.googleapis.com/v4/spreadsheets/${
+          import.meta.env.VITE_PROFORM_RECORDS_ID
+        }/values/Реестр!C3:G1000`,
         {
           headers: { Authorization: `Bearer ${token}` },
         }
@@ -249,13 +275,17 @@ function App() {
 
       const proformRecordsData = await proformRecords.json();
 
-      if(proformRecordsData.values) {
-        for(const row of proformRecordsData.values) {
-          if(row[0] && row[2]) {
+      if (proformRecordsData.values) {
+        for (const row of proformRecordsData.values) {
+          if (row[0] && row[2]) {
             if (/^\d{2}\.\d{2}\.\d{4}$/.test(row[0])) {
               const rowDate = parseDate(row[0]);
-              if (rowDate >= start && rowDate <= end && row[4] === orderProform.buyer) {
-                const price = Number(row[2].replace(/\s/g, ''));
+              if (
+                rowDate >= start &&
+                rowDate <= end &&
+                row[4] === orderProform.buyer
+              ) {
+                const price = Number(row[2].replace(/\s/g, ""));
                 if (!isNaN(price)) {
                   totalPriceCost += price;
                 }
@@ -265,32 +295,60 @@ function App() {
         }
       }
     } catch (error) {
-        console.error('Ошибка при получении данных из реестра:', error);
+      console.error("Ошибка при получении данных из реестра:", error);
     }
 
     // Собираем товары со всех листов
     let allItems = [];
     for (const sheet of filteredSheets) {
       const title = sheet.properties.title;
-      // Получаем диапазон B9:F (до строки с "Итого" в B)
-      const dataResp = await fetch(
+
+      // Сначала проверяем покупателя на 5-й строке
+      const buyerInfoResp = await fetch(
         `https://sheets.googleapis.com/v4/spreadsheets/${
           import.meta.env.VITE_SPREADSHEET_ID
-        }/values/'${encodeURIComponent(title)}'!B11:F1000`,
+        }/values/'${encodeURIComponent(title)}'!A5:A5`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
-      const data = await dataResp.json();
-      if (!data.values) continue;
-      for (let i = 0; i < data.values.length; i++) {
-        const row = data.values[i];
-        if (row[0] === "Итого") break;
-        // if (!row[0] || !row[3]) continue;
-        allItems.push({
-          name: row[0],
-          measure: row[1] || "",
-          quantity: Number(row[2]) || 0,
-          price: row[0] !== "Доставка" ? Number(row[3]) : Number(String(row[4]).replace(/\s/g, "")),
-        });
+
+      const buyerInfo = await buyerInfoResp.json();
+
+      // Проверяем, совпадает ли покупатель
+      if (buyerInfo.values && buyerInfo.values[0] && buyerInfo.values[0][0]) {
+        const buyerString = buyerInfo.values[0][0]; // Берем значение из первой колонки
+        const extractedBuyer = extractBuyerName(buyerString);
+
+        // Пропускаем лист, если покупатель не совпадает
+        if (extractedBuyer === buyerName) {
+          // Получаем диапазон B9:F (до строки с "Итого" в B)
+          const dataResp = await fetch(
+            `https://sheets.googleapis.com/v4/spreadsheets/${
+              import.meta.env.VITE_SPREADSHEET_ID
+            }/values/'${encodeURIComponent(title)}'!B11:F1000`,
+            { headers: { Authorization: `Bearer ${token}` } }
+          );
+          const data = await dataResp.json();
+          if (!data.values) continue;
+          for (let i = 0; i < data.values.length; i++) {
+            const row = data.values[i];
+            if (row[0] === "Итого") break;
+            // if (!row[0] || !row[3]) continue;
+            allItems.push({
+              name: row[0],
+              measure: row[1] || "",
+              quantity: Number(row[2]) || 0,
+              price:
+                row[0] !== "Доставка"
+                  ? Number(row[3])
+                  : Number(String(row[4]).replace(/\s/g, "")),
+            });
+          }
+        }
+      } else {
+        console.log(
+          `Пропускаем лист ${title}: не удалось получить информацию о покупателе`
+        );
+        continue;
       }
     }
 
@@ -331,7 +389,7 @@ function App() {
       merged.push(deliveryItem);
     }
 
-    return {merged: merged, totalPriceCost: totalPriceCost};
+    return { merged: merged, totalPriceCost: totalPriceCost };
   }
 
   const submitOrder = async (token) => {
@@ -365,7 +423,8 @@ function App() {
             .replace(/-/g, ".")
             .split(".")
             .reverse()
-            .join(".")
+            .join("."),
+          orderProform.buyer
         );
       } catch (e) {
         setError("Ошибка при сборе товаров по периоду: " + e.message);
@@ -374,13 +433,19 @@ function App() {
       }
     }
 
-    const totalSum = (orderProform.orderType === "Накладная" ? itemsToUse : itemsToUse.merged).reduce((sum, item) => {
+    const totalSum = (
+      orderProform.orderType === "Накладная" ? itemsToUse : itemsToUse.merged
+    ).reduce((sum, item) => {
       return (
         sum +
         Math.round(
           orderProform.orderType === "Накладная"
-                ? (item.name === "Доставка" ? +item.price
-                : item.price * item.quantity) : (item.name !== "Доставка" ? (item.price * item.quantity) : item.price)
+            ? item.name === "Доставка"
+              ? +item.price
+              : item.price * item.quantity
+            : item.name !== "Доставка"
+            ? item.price * item.quantity
+            : item.price
         )
       );
     }, 0);
@@ -397,21 +462,39 @@ function App() {
         .join(".")} г.`,
       orderDate: orderProform.proformDate.split("-").reverse().join("."),
       buyer: `Покупатель: ${orderProform.buyer} ИНН ${orderProform.iin}`,
-      constructionName: orderProform.orderType === "Накладная" ? `Объект: ${orderProform.constructionName}` : "",
+      constructionName:
+        orderProform.orderType === "Накладная"
+          ? `Объект: ${orderProform.constructionName}`
+          : "",
       bankAccount: `р/с ${orderProform.bankAccount} в ${orderProform.bankName}`,
-      items: (orderProform.orderType === "Накладная" ? itemsToUse : itemsToUse.merged).map((item) => ({
+      items: (orderProform.orderType === "Накладная"
+        ? itemsToUse
+        : itemsToUse.merged
+      ).map((item) => ({
         name: item.name,
         price: item.name !== "Доставка" ? +item.price : null,
         measure: item.measure,
         quantity: item.quantity,
-        totalPriceCost: orderProform.orderType === "Накладная" ? (item.name !== "Доставка" ? item.costPrice * item.quantity : item.price) : 0,
+        totalPriceCost:
+          orderProform.orderType === "Накладная"
+            ? item.name !== "Доставка"
+              ? item.costPrice * item.quantity
+              : item.price
+            : 0,
         total: Math.round(
           orderProform.orderType === "Накладная"
-                ? (item.name === "Доставка" ? +item.price
-                : item.price * item.quantity) : (item.name !== "Доставка" ? (item.price * item.quantity) : item.price)
+            ? item.name === "Доставка"
+              ? +item.price
+              : item.price * item.quantity
+            : item.name !== "Доставка"
+            ? item.price * item.quantity
+            : item.price
         ),
       })),
-      totalPriceCost: orderProform.orderType !== "Накладная" ? itemsToUse.totalPriceCost : null,
+      totalPriceCost:
+        orderProform.orderType !== "Накладная"
+          ? itemsToUse.totalPriceCost
+          : null,
       totalSum: `Итого к оплате: ${convertNumberToWordsRu(
         Math.round(totalSum),
         {
@@ -463,7 +546,7 @@ function App() {
       );
 
       const createResult = await createResponse.json();
-      
+
       if (!createResponse.ok) throw new Error(JSON.stringify(createResult));
       const sheetId = createResult.replies[0].addSheet.properties.sheetId;
 
@@ -483,12 +566,19 @@ function App() {
         0
       );
 
-      const totalCostSumInDigits = orderProform.orderType !== "Накладная" ? itemsToUse.totalPriceCost : (orderData.items.reduce(
-        (sum, item) => sum + (item.name !== "Доставка" ? item.totalPriceCost : 0),
-        0
-      ));
+      const totalCostSumInDigits =
+        orderProform.orderType !== "Накладная"
+          ? itemsToUse.totalPriceCost
+          : orderData.items.reduce(
+              (sum, item) =>
+                sum + (item.name !== "Доставка" ? item.totalPriceCost : 0),
+              0
+            );
 
-      const totalRow = orderProform.orderType === "Накладная" ? (11 + items.length) : (9 + items.length);
+      const totalRow =
+        orderProform.orderType === "Накладная"
+          ? 11 + items.length
+          : 9 + items.length;
 
       // 3. Формируем все запросы на обновление
       const requests = [
@@ -553,18 +643,22 @@ function App() {
             mergeType: "MERGE_ALL",
           },
         },
-        ...(orderProform.orderType === "Накладная" ? [{
-          mergeCells: {
-            range: {
-              sheetId,
-              startRowIndex: 7,
-              endRowIndex: 8,
-              startColumnIndex: 0,
-              endColumnIndex: 6,
-            },
-            mergeType: "MERGE_ALL",
-          },
-        }] : []),
+        ...(orderProform.orderType === "Накладная"
+          ? [
+              {
+                mergeCells: {
+                  range: {
+                    sheetId,
+                    startRowIndex: 7,
+                    endRowIndex: 8,
+                    startColumnIndex: 0,
+                    endColumnIndex: 6,
+                  },
+                  mergeType: "MERGE_ALL",
+                },
+              },
+            ]
+          : []),
         // Заполнение данных
         {
           updateCells: {
@@ -720,51 +814,55 @@ function App() {
           },
         },
         // Информация об объекте
-        ...(orderProform.orderType === "Накладная" ? [{
-          updateCells: {
-            range: {
-              sheetId,
-              startRowIndex: 7,
-              endRowIndex: 8,
-              startColumnIndex: 0,
-              endColumnIndex: 6,
-            },
-            rows: [
+        ...(orderProform.orderType === "Накладная"
+          ? [
               {
-                values: [
-                  {
-                    userEnteredValue: {
-                      stringValue: orderData.constructionName,
-                    },
-                    userEnteredFormat: {
-                      textFormat: {
-                        bold: false,
-                        fontFamily: "Times New Roman",
-                        fontSize: 12,
-                      },
-                      horizontalAlignment: "LEFT",
-                    },
-                    textFormatRuns: [
-                      {
-                        startIndex: 0,
-                        format: {
-                          bold: false,
-                        },
-                      },
-                      {
-                        startIndex: 7,
-                        format: {
-                          bold: true,
-                        },
-                      },
-                    ],
+                updateCells: {
+                  range: {
+                    sheetId,
+                    startRowIndex: 7,
+                    endRowIndex: 8,
+                    startColumnIndex: 0,
+                    endColumnIndex: 6,
                   },
-                ],
+                  rows: [
+                    {
+                      values: [
+                        {
+                          userEnteredValue: {
+                            stringValue: orderData.constructionName,
+                          },
+                          userEnteredFormat: {
+                            textFormat: {
+                              bold: false,
+                              fontFamily: "Times New Roman",
+                              fontSize: 12,
+                            },
+                            horizontalAlignment: "LEFT",
+                          },
+                          textFormatRuns: [
+                            {
+                              startIndex: 0,
+                              format: {
+                                bold: false,
+                              },
+                            },
+                            {
+                              startIndex: 7,
+                              format: {
+                                bold: true,
+                              },
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                  ],
+                  fields: "userEnteredValue,userEnteredFormat,textFormatRuns",
+                },
               },
-            ],
-            fields: "userEnteredValue,userEnteredFormat,textFormatRuns",
-          },
-        }] : []),
+            ]
+          : []),
         // Заголовки таблицы товаров
         {
           updateCells: {
@@ -856,7 +954,10 @@ function App() {
             range: {
               sheetId,
               startRowIndex: orderProform.orderType === "Накладная" ? 10 : 8,
-              endRowIndex: orderProform.orderType === "Накладная" ? (10 + orderData.items.length) : (8 + orderData.items.length),
+              endRowIndex:
+                orderProform.orderType === "Накладная"
+                  ? 10 + orderData.items.length
+                  : 8 + orderData.items.length,
               startColumnIndex: 0,
               endColumnIndex: 6,
             },
@@ -1196,7 +1297,10 @@ function App() {
             range: {
               sheetId,
               startRowIndex: orderProform.orderType === "Накладная" ? 9 : 7,
-              endRowIndex: orderProform.orderType === "Накладная" ? (10 + items.length + 1) : (8 + items.length + 1),
+              endRowIndex:
+                orderProform.orderType === "Накладная"
+                  ? 10 + items.length + 1
+                  : 8 + items.length + 1,
               startColumnIndex: 0,
               endColumnIndex: 6,
             },
@@ -1253,7 +1357,7 @@ function App() {
           orderProform.orderType === "Накладная"
             ? Math.max(6, (proformListData.values?.length || 5) + 1)
             : Math.max(4, (proformListData.values?.length || 3) + 1);
-            
+
         const proformListRowData = [
           nextRow - 2,
           `№${orderProform.proformNumber}`,
@@ -1380,8 +1484,10 @@ function App() {
     } catch (error) {
       console.error("Error creating order sheet:", error);
       const errorData = JSON.parse(error.message);
-      if (errorData.error?.message?.includes('already exists')) {
-        setError("Лист с таким названием уже существует. Пожалуйста, измените название и попробуйте снова.");
+      if (errorData.error?.message?.includes("already exists")) {
+        setError(
+          "Лист с таким названием уже существует. Пожалуйста, измените название и попробуйте снова."
+        );
       }
       throw error;
     } finally {
@@ -1483,9 +1589,9 @@ function App() {
                   setOrderProform((prev) => ({
                     ...prev,
                     orderType: value,
-                  }))
+                  }));
                   setSubmissionStatus(null);
-                  setDownloadUrl(null)
+                  setDownloadUrl(null);
                 }}
               >
                 <SelectTrigger className="w-1/3">
@@ -1673,66 +1779,67 @@ function App() {
                     }
                   />
                 </div>
-                {(orderProform.orderType === "Накладная" && orderProform.buyer.length > 0) && (
-                  <div>
-                    <Label htmlFor="constructionName">Название объекта</Label>
-                    <Popover
-                      open={isPopoverOpen2}
-                      onOpenChange={setIsPopoverOpen2}
-                    >
-                      <PopoverTrigger asChild>
-                        <div>
-                          <Input
-                            id="constructionName"
-                            type="text"
-                            value={orderProform.constructionName}
-                            onChange={(e) => {
-                              setOrderProform((prev) => ({
-                                ...prev,
-                                constructionName: e.target.value,
-                              }));
-                              setIsPopoverOpen2(true);
-                            }}
-                            onClick={() => setIsPopoverOpen2(true)}
-                            placeholder="Введите название объекта"
-                          />
-                        </div>
-                      </PopoverTrigger>
-                      <PopoverContent
-                        className="p-4"
-                        align="start"
-                        onOpenAutoFocus={(e) => e.preventDefault()}
+                {orderProform.orderType === "Накладная" &&
+                  orderProform.buyer.length > 0 && (
+                    <div>
+                      <Label htmlFor="constructionName">Название объекта</Label>
+                      <Popover
+                        open={isPopoverOpen2}
+                        onOpenChange={setIsPopoverOpen2}
                       >
-                        {orderProform.buyer.length > 0 && (
-                          <div className="space-y-2">
-                            {buyersList
-                              .find(
-                                (potential) =>
-                                  orderProform.buyer === potential.name
-                              )
-                              ?.constructions?.map((construction) => (
-                                <div
-                                  key={construction}
-                                  className="p-2 hover:bg-gray-100 rounded cursor-pointer"
-                                  onClick={() => {
-                                    setOrderProform((prev) => ({
-                                      ...prev,
-                                      constructionName: construction,
-                                    }));
-                                    setIsPopoverOpen2(false);
-                                  }}
-                                >
-                                  <span className="text-sm">
-                                    {construction}
-                                  </span>
-                                </div>
-                              ))}
+                        <PopoverTrigger asChild>
+                          <div>
+                            <Input
+                              id="constructionName"
+                              type="text"
+                              value={orderProform.constructionName}
+                              onChange={(e) => {
+                                setOrderProform((prev) => ({
+                                  ...prev,
+                                  constructionName: e.target.value,
+                                }));
+                                setIsPopoverOpen2(true);
+                              }}
+                              onClick={() => setIsPopoverOpen2(true)}
+                              placeholder="Введите название объекта"
+                            />
                           </div>
-                        )}
-                      </PopoverContent>
-                    </Popover>
-                  </div>
-                )}
+                        </PopoverTrigger>
+                        <PopoverContent
+                          className="p-4"
+                          align="start"
+                          onOpenAutoFocus={(e) => e.preventDefault()}
+                        >
+                          {orderProform.buyer.length > 0 && (
+                            <div className="space-y-2">
+                              {buyersList
+                                .find(
+                                  (potential) =>
+                                    orderProform.buyer === potential.name
+                                )
+                                ?.constructions?.map((construction) => (
+                                  <div
+                                    key={construction}
+                                    className="p-2 hover:bg-gray-100 rounded cursor-pointer"
+                                    onClick={() => {
+                                      setOrderProform((prev) => ({
+                                        ...prev,
+                                        constructionName: construction,
+                                      }));
+                                      setIsPopoverOpen2(false);
+                                    }}
+                                  >
+                                    <span className="text-sm">
+                                      {construction}
+                                    </span>
+                                  </div>
+                                ))}
+                            </div>
+                          )}
+                        </PopoverContent>
+                      </Popover>
+                    </div>
+                  )}
                 <Button
                   onClick={() => submitOrder(token)}
                   disabled={
@@ -1748,11 +1855,7 @@ function App() {
                   {isSubmitting ? "Отправка..." : "Оформить"}
                 </Button>
               </div>
-              {
-                error && (
-                  <span className="text-red-500">{error}</span>
-                )
-              }
+              {error && <span className="text-red-500">{error}</span>}
               {submissionStatus && (
                 <div>
                   <img
@@ -1789,10 +1892,7 @@ function App() {
                 <CardContent className="w-full">
                   <div className="mb-4">
                     <Label htmlFor="search">Поиск товаров</Label>
-                    <Popover
-                      open={open}
-                      onOpenChange={setOpen}
-                    >
+                    <Popover open={open} onOpenChange={setOpen}>
                       <PopoverTrigger asChild>
                         <Button
                           variant="outline"
@@ -1845,16 +1945,20 @@ function App() {
                           <div>
                             <h3 className="font-medium">{item.name}</h3>
                             <p>
-                              Цена: {item.name !== "Доставка" ? (
+                              Цена:{" "}
+                              {item.name !== "Доставка" ? (
                                 <>
-                                {Number(item.price)} сом × {item.quantity} =
-                                <span className="font-bold">
-                                  {" "}
-                                  {Number(item.price) * item.quantity} сом
-                                </span>
+                                  {Number(item.price)} сом × {item.quantity} =
+                                  <span className="font-bold">
+                                    {" "}
+                                    {Number(item.price) * item.quantity} сом
+                                  </span>
                                 </>
-                              ) : <span className="font-bold">{item.price} сом</span>}
-                              
+                              ) : (
+                                <span className="font-bold">
+                                  {item.price} сом
+                                </span>
+                              )}
                             </p>
                           </div>
                           <div className="flex items-end space-x-2">
@@ -1896,9 +2000,11 @@ function App() {
                                 }}
                               />
                             </div>
-                            { item.name !== "Доставка" && (
+                            {item.name !== "Доставка" && (
                               <div className="flex flex-col items-center">
-                                <Label className="text-xs mb-1">Себестоимость</Label>
+                                <Label className="text-xs mb-1">
+                                  Себестоимость
+                                </Label>
                                 <Input
                                   type="number"
                                   className="w-20 h-8 text-center"
