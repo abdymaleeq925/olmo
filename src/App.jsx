@@ -56,7 +56,7 @@ function App() {
   const [debouncedIin] = useDebounce(orderProform.iin, 1000);
   const [debouncedBankAccount] = useDebounce(orderProform.bankAccount, 1000);
 
-  // const sortedData = sortMaterials(materialData);
+  const sortedData = sortMaterials(materialData);
   // console.log("sortedData",sortedData);
 
   useEffect(() => {
@@ -217,7 +217,8 @@ function App() {
     token,
     periodStart,
     periodEnd,
-    buyerName
+    buyerName,
+    constructionName
   ) {
     const sheetsInfoResponse = await fetch(
       `https://sheets.googleapis.com/v4/spreadsheets/${
@@ -249,6 +250,15 @@ function App() {
 
       // Берем часть до "ИНН" и убираем лишние пробелы
       return withoutPrefix.substring(0, innIndex).trim();
+    }
+
+    function extractConstructionName(buyerString) {
+      if (!buyerString) return null;
+
+      // Убираем префикс "Объект: "
+      const withoutPrefix = buyerString.replace("Объект: ", "");
+      // убираем лишние пробелы
+      return withoutPrefix.trim();
     }
 
     const filteredSheets = sheetsInfo.sheets.filter((sheet) => {
@@ -283,7 +293,8 @@ function App() {
               if (
                 rowDate >= start &&
                 rowDate <= end &&
-                row[4] === orderProform.buyer
+                row[4].split("(")[0].trim() === orderProform.buyer &&
+                row[4].slice(row[4].indexOf("(") + 1, row[4].indexOf(")")) === orderProform.constructionName
               ) {
                 const price = Number(row[2].replace(/\s/g, ""));
                 if (!isNaN(price)) {
@@ -307,19 +318,22 @@ function App() {
       const buyerInfoResp = await fetch(
         `https://sheets.googleapis.com/v4/spreadsheets/${
           import.meta.env.VITE_SPREADSHEET_ID
-        }/values/'${encodeURIComponent(title)}'!A5:A5`,
+        }/values/'${encodeURIComponent(title)}'!A5:A8`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
 
       const buyerInfo = await buyerInfoResp.json();
 
       // Проверяем, совпадает ли покупатель
-      if (buyerInfo.values && buyerInfo.values[0] && buyerInfo.values[0][0]) {
+      if (buyerInfo.values && (buyerInfo.values[0] && buyerInfo.values[3]) && (buyerInfo.values[0][0] && buyerInfo.values[3][0])) {
         const buyerString = buyerInfo.values[0][0]; // Берем значение из первой колонки
+        const recievedConstructionName = buyerInfo.values[3][0];
         const extractedBuyer = extractBuyerName(buyerString);
+        const extractedConstructionName = extractConstructionName(recievedConstructionName);
+
 
         // Пропускаем лист, если покупатель не совпадает
-        if (extractedBuyer === buyerName) {
+        if (extractedBuyer === buyerName && extractedConstructionName === constructionName) {
           // Получаем диапазон B9:F (до строки с "Итого" в B)
           const dataResp = await fetch(
             `https://sheets.googleapis.com/v4/spreadsheets/${
@@ -424,7 +438,8 @@ function App() {
             .split(".")
             .reverse()
             .join("."),
-          orderProform.buyer
+          orderProform.buyer,
+          orderProform.constructionName
         );
       } catch (e) {
         setError("Ошибка при сборе товаров по периоду: " + e.message);
@@ -491,10 +506,7 @@ function App() {
             : item.price
         ),
       })),
-      totalPriceCost:
-        orderProform.orderType !== "Накладная"
-          ? itemsToUse.totalPriceCost
-          : null,
+      totalPriceCost: itemsToUse.totalPriceCost,
       totalSum: `Итого к оплате: ${convertNumberToWordsRu(
         Math.round(totalSum),
         {
@@ -575,10 +587,7 @@ function App() {
               0
             );
 
-      const totalRow =
-        orderProform.orderType === "Накладная"
-          ? 11 + items.length
-          : 9 + items.length;
+      const totalRow = 11 + items.length;
 
       // 3. Формируем все запросы на обновление
       const requests = [
@@ -643,22 +652,18 @@ function App() {
             mergeType: "MERGE_ALL",
           },
         },
-        ...(orderProform.orderType === "Накладная"
-          ? [
-              {
-                mergeCells: {
-                  range: {
-                    sheetId,
-                    startRowIndex: 7,
-                    endRowIndex: 8,
-                    startColumnIndex: 0,
-                    endColumnIndex: 6,
-                  },
-                  mergeType: "MERGE_ALL",
-                },
-              },
-            ]
-          : []),
+        {
+          mergeCells: {
+            range: {
+              sheetId,
+              startRowIndex: 7,
+              endRowIndex: 8,
+              startColumnIndex: 0,
+              endColumnIndex: 6,
+            },
+            mergeType: "MERGE_ALL",
+          },
+        },
         // Заполнение данных
         {
           updateCells: {
@@ -814,62 +819,58 @@ function App() {
           },
         },
         // Информация об объекте
-        ...(orderProform.orderType === "Накладная"
-          ? [
+        {
+          updateCells: {
+            range: {
+              sheetId,
+              startRowIndex: 7,
+              endRowIndex: 8,
+              startColumnIndex: 0,
+              endColumnIndex: 6,
+            },
+            rows: [
               {
-                updateCells: {
-                  range: {
-                    sheetId,
-                    startRowIndex: 7,
-                    endRowIndex: 8,
-                    startColumnIndex: 0,
-                    endColumnIndex: 6,
-                  },
-                  rows: [
-                    {
-                      values: [
-                        {
-                          userEnteredValue: {
-                            stringValue: orderData.constructionName,
-                          },
-                          userEnteredFormat: {
-                            textFormat: {
-                              bold: false,
-                              fontFamily: "Times New Roman",
-                              fontSize: 12,
-                            },
-                            horizontalAlignment: "LEFT",
-                          },
-                          textFormatRuns: [
-                            {
-                              startIndex: 0,
-                              format: {
-                                bold: false,
-                              },
-                            },
-                            {
-                              startIndex: 7,
-                              format: {
-                                bold: true,
-                              },
-                            },
-                          ],
-                        },
-                      ],
+                values: [
+                  {
+                    userEnteredValue: {
+                      stringValue: orderProform.orderType === "Накладная" ? orderData.constructionName : `Объект: ${orderProform.constructionName}`,
                     },
-                  ],
-                  fields: "userEnteredValue,userEnteredFormat,textFormatRuns",
-                },
+                    userEnteredFormat: {
+                      textFormat: {
+                        bold: false,
+                        fontFamily: "Times New Roman",
+                        fontSize: 12,
+                      },
+                      horizontalAlignment: "LEFT",
+                    },
+                    textFormatRuns: [
+                      {
+                        startIndex: 0,
+                        format: {
+                          bold: false,
+                        },
+                      },
+                      {
+                        startIndex: 7,
+                        format: {
+                          bold: true,
+                        },
+                      },
+                    ],
+                  },
+                ],
               },
-            ]
-          : []),
+            ],
+            fields: "userEnteredValue,userEnteredFormat,textFormatRuns",
+          },
+        },
         // Заголовки таблицы товаров
         {
           updateCells: {
             range: {
               sheetId,
-              startRowIndex: orderProform.orderType === "Накладная" ? 9 : 7,
-              endRowIndex: orderProform.orderType === "Накладная" ? 10 : 8,
+              startRowIndex: 9,
+              endRowIndex: 10,
               startColumnIndex: 0,
               endColumnIndex: 6,
             },
@@ -953,11 +954,8 @@ function App() {
           updateCells: {
             range: {
               sheetId,
-              startRowIndex: orderProform.orderType === "Накладная" ? 10 : 8,
-              endRowIndex:
-                orderProform.orderType === "Накладная"
-                  ? 10 + orderData.items.length
-                  : 8 + orderData.items.length,
+              startRowIndex: 10,
+              endRowIndex: 10 + orderData.items.length,
               startColumnIndex: 0,
               endColumnIndex: 6,
             },
@@ -1296,11 +1294,8 @@ function App() {
           updateBorders: {
             range: {
               sheetId,
-              startRowIndex: orderProform.orderType === "Накладная" ? 9 : 7,
-              endRowIndex:
-                orderProform.orderType === "Накладная"
-                  ? 10 + items.length + 1
-                  : 8 + items.length + 1,
+              startRowIndex: 9,
+              endRowIndex:10 + items.length + 1,
               startColumnIndex: 0,
               endColumnIndex: 6,
             },
@@ -1368,7 +1363,7 @@ function App() {
           totalSumInDigits,
           totalCostSumInDigits,
           totalSumInDigits - totalCostSumInDigits,
-          orderProform.buyer,
+          `${orderProform.buyer} (${orderProform.constructionName})`,
         ];
 
         const addToProformListResponse = await fetch(
@@ -1486,7 +1481,7 @@ function App() {
       const errorData = JSON.parse(error.message);
       if (errorData.error?.message?.includes("already exists")) {
         setError(
-          "Лист с таким названием уже существует. Пожалуйста, измените название и попробуйте снова."
+          `${orderProform.orderType} с таким названием уже существует. Пожалуйста, измените название и попробуйте снова.`
         );
       }
       throw error;
@@ -1779,8 +1774,7 @@ function App() {
                     }
                   />
                 </div>
-                {orderProform.orderType === "Накладная" &&
-                  orderProform.buyer.length > 0 && (
+                { orderProform.buyer.length > 0 && (
                     <div>
                       <Label htmlFor="constructionName">Название объекта</Label>
                       <Popover
