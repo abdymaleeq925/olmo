@@ -56,8 +56,8 @@ function App() {
   const [debouncedIin] = useDebounce(orderProform.iin, 1000);
   const [debouncedBankAccount] = useDebounce(orderProform.bankAccount, 1000);
 
-  // const sortedData = sortMaterials(materialData);
-  // console.log("sortedData",sortedData);
+  const sortedData = sortMaterials(materialData);
+  console.log("sortedData",sortedData);
 
   useEffect(() => {
     const cachedToken = localStorage.getItem("google_access_token");
