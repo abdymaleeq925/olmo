@@ -1942,7 +1942,7 @@ function App() {
                               Цена:{" "}
                               {item.name !== "Доставка" ? (
                                 <>
-                                  {Number(item.price)} сом × {item.quantity} =
+                                  {Number(item.price)} сом × {item.quantity} {item.measure} =
                                   <span className="font-bold">
                                     {" "}
                                     {Number(item.price) * item.quantity} сом
