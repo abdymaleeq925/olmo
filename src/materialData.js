@@ -3074,10 +3074,16 @@ export const materialData = [
     name: "Электродержатель для сварки",
     measure: "шт",
   },
+  {
+    id: 616,
+    name: "Сеткамак ВР5 2х3м, 100х100мм",
+    measure: "шт",
+  },
 ];
 
 export const buyersList = [
   {
+    id: 1,
     name: "Артис Строй Констракшн",
     iin: "02511202010082",
     bankAccount: "1030220000191440",
@@ -3090,6 +3096,7 @@ export const buyersList = [
     ],
   },
   {
+    id: 2,
     name: "ОсОО 'Гетест'",
     iin: "00206200010016",
     bankAccount: "1091520103260189",
@@ -3101,6 +3108,7 @@ export const buyersList = [
     ],
   },
   {
+    id: 3,
     name: "ОсОО 'СК Оптима'",
     iin: "02904199210026",
     bankAccount: "1090800015300173",
@@ -3108,6 +3116,7 @@ export const buyersList = [
     constructions: ["Малдыбаева 279", "Test2"],
   },
   {
+    id: 4,
     name: "Алымбек",
     iin: "01111111111111",
     bankAccount: "1000000000000000",
@@ -3115,6 +3124,21 @@ export const buyersList = [
     constructions: ["ОП Браво Плюс"],
   },
 ];
+
+export const monthToColumn = {
+  11: 'N', // ноябрь
+  12: 'P', // декабрь
+  1: 'R', // январь
+  2: 'T', // февраль
+  3: 'V', // март
+  4: 'X', // апрель
+  5: 'Z', // май
+  6: 'AB', // июнь
+  7: 'AD', // июль
+  8: 'AF', // август
+  9: 'AH', // сентябрь
+  10: 'AJ', // октябрь
+  };
 
 export const sortMaterials = (materials) => {
   return materials

@@ -24,7 +24,7 @@ import {
   SelectItem,
   SelectValue,
 } from "./components/ui/select";
-import { buyersList, materialData, sortMaterials } from "./materialData";
+import { buyersList, materialData, monthToColumn, sortMaterials } from "./materialData";
 import { useDebounce } from "use-debounce";
 
 function App() {
@@ -1383,6 +1383,61 @@ function App() {
             }),
           }
         );
+
+        if(orderProform.orderType === "Накладная") {
+          const proformDate = new Date(orderProform.proformDate);
+          const targetRow = 7 + buyersList.find(buyer => buyer.name === orderProform.buyer)?.id;
+          const month = proformDate.getMonth() + 1;
+          const targetColumn = monthToColumn[month];
+          if (!targetColumn) {
+            console.error(`Не определена колонка для месяца: ${month}`);
+            return;
+          }
+
+          // 1) Прочитать текущее значение ячейки (может быть пустым)
+          const getCellResp = await fetch(
+            `https://sheets.googleapis.com/v4/spreadsheets/${
+              import.meta.env.VITE_LIST_SPREADSHEET_ID
+            }/values/Бухгалтерия!${targetColumn}${targetRow}`,
+            {
+              headers: {
+                Authorization: `Bearer ${validToken}`,
+              },
+            }
+          );
+
+          let currentCellValue = 0;
+          if (getCellResp.ok) {
+            const getCellData = await getCellResp.json();
+            const raw = getCellData?.values?.[0]?.[0];
+            const parsed = parseFloat(String(raw).replace(/\s/g, '').replace(',', '.'));
+            currentCellValue = Number.isFinite(parsed) ? parsed : 0;
+          }
+
+          const newSumValue = currentCellValue + totalSumInDigits;
+
+          // 2) Записать новое суммарное значение
+          const updateCellResp = await fetch(
+            `https://sheets.googleapis.com/v4/spreadsheets/${
+              import.meta.env.VITE_LIST_SPREADSHEET_ID
+            }/values/Бухгалтерия!${targetColumn}${targetRow}?valueInputOption=RAW`,
+            {
+              method: "PUT",
+              headers: {
+                Authorization: `Bearer ${validToken}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                values: [[newSumValue]],
+              }),
+            }
+          );
+
+          if (!updateCellResp.ok) {
+            throw new Error('Ошибка при обновлении Google Sheets');
+          }
+        }
+        
 
         if (!addToProformListResponse.ok) {
           const proformListError = await addToProformListResponse.json();
