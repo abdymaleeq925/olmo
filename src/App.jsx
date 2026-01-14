@@ -276,7 +276,7 @@ function App() {
     try {
       const proformRecords = await fetch(
         `https://sheets.googleapis.com/v4/spreadsheets/${
-          import.meta.env.VITE_PROFORM_RECORDS_ID
+          import.meta.env.VITE_LIST_SPREADSHEET_ID
         }/values/Реестр!C3:G1000`,
         {
           headers: { Authorization: `Bearer ${token}` },
@@ -294,7 +294,7 @@ function App() {
                 rowDate >= start &&
                 rowDate <= end &&
                 row[4].split("(")[0].trim() === orderProform.buyer &&
-                row[4].slice(row[4].indexOf("(") + 1, row[4].indexOf(")")) === orderProform.constructionName
+                row[4].slice(row[4].indexOf("(") + 1, row[4].indexOf(")")).trim() === orderProform.constructionName.trim()
               ) {
                 const price = Number(row[2].replace(/\s/g, ""));
                 if (!isNaN(price)) {
@@ -495,7 +495,7 @@ function App() {
             ? item.name !== "Доставка"
               ? item.costPrice * item.quantity
               : item.price
-            : 0,
+            : itemsToUse.totalPriceCost,
         total: Math.round(
           orderProform.orderType === "Накладная"
             ? item.name === "Доставка"
@@ -521,6 +521,8 @@ function App() {
         }
       )}`,
     };
+
+    console.log("orderData", orderData);
 
     try {
       // 1. Создаем новый лист
