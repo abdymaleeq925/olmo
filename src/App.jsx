@@ -1,10 +1,13 @@
 import { useState, useEffect } from "react";
 import { useGoogleLogin } from "@react-oauth/google";
 import { convert as convertNumberToWordsRu } from "number-to-words-ru";
+import { useDebounce } from "use-debounce";
+
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./components/ui/dialog";
 import {
   Command,
   CommandEmpty,
@@ -24,12 +27,14 @@ import {
   SelectItem,
   SelectValue,
 } from "./components/ui/select";
-import { buyersList, materialData, monthToColumn, sortMaterials } from "./materialData";
-import { useDebounce } from "use-debounce";
+
+import { loadInvoice, refreshToken, submitOrder, validateForm, translateGoogleError } from "./utils";
+import { buyersList, materialData, sortMaterials } from "./materialData";
+import { Loader2 } from "lucide-react";
 
 function App() {
+
   const [token, setToken] = useState(null);
-  const [selectedItems, setSelectedItems] = useState([]);
   const [orderProform, setOrderProform] = useState({
     orderType: "Накладная",
     orderPeriodStart: "",
@@ -42,22 +47,35 @@ function App() {
     bankAccount: "",
     bankName: "",
   });
+  const [selectedItems, setSelectedItems] = useState([]);
+  const [open, setOpen] = useState(false);
+
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submissionStatus, setSubmissionStatus] = useState(null);
-  const [open, setOpen] = useState(false);
-  const [error, setError] = useState(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [isPopoverOpen, setIsPopoverOpen] = useState(false);
-  const [isPopoverOpen2, setIsPopoverOpen2] = useState(false);
-  const [filteredBuyers, setFilteredBuyers] = useState(buyersList);
   const [downloadUrl, setDownloadUrl] = useState(null);
+
+  const [error, setError] = useState(null);
   const [iinError, setIinError] = useState(null);
   const [bankAccountError, setBankAccountError] = useState(null);
+  
   const [debouncedIin] = useDebounce(orderProform.iin, 1000);
   const [debouncedBankAccount] = useDebounce(orderProform.bankAccount, 1000);
 
+  const [modalOpen, setModalOpen] = useState(false);
+  const [loadProform, setLoadProform] = useState("");
+
+  const [isEditingExisting, setIsEditingExisting] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingInvoice, setIsLoadingInvoice] = useState(false);
+  const [isPopoverOpen, setIsPopoverOpen] = useState(false);
+  const [isPopoverOpen2, setIsPopoverOpen2] = useState(false);
+
+  const [filteredBuyers, setFilteredBuyers] = useState(buyersList);
+  const [convertToInvoice, setConvertToInvoice] = useState(false);
+
   const sortedData = sortMaterials(materialData);
-  console.log("sortedData",sortedData);
+  const isValid = validateForm(orderProform, orderProform.orderType, iinError, bankAccountError);
+  console.log("sortedData", sortedData);
 
   useEffect(() => {
     const cachedToken = localStorage.getItem("google_access_token");
@@ -72,6 +90,29 @@ function App() {
         localStorage.removeItem("google_token_expiry");
       }
     }
+  }, []);
+
+  useEffect(() => {
+    const checkAuth = async () => {
+      const accessToken = localStorage.getItem("google_access_token");
+      const expiryTime = localStorage.getItem("google_token_expiry");
+
+      if (!accessToken || !expiryTime) {
+        handleLogout();
+        return;
+      }
+
+      const isExpiring = parseInt(expiryTime, 10) - Date.now() < 5 * 60 * 1000;
+      if (isExpiring) {
+        await refreshToken();
+      } else {
+        setToken(accessToken);
+      }
+    };
+
+    checkAuth();
+    const interval = setInterval(checkAuth, 60 * 1000); // Каждую минуту
+    return () => clearInterval(interval);
   }, []);
 
   const login = useGoogleLogin({
@@ -99,8 +140,10 @@ function App() {
         );
 
         const tokens = await tokenResponse.json();
-        if (!tokenResponse.ok)
-          throw new Error(tokens.error || "Ошибка получения токенов");
+        if (!tokenResponse.ok) {
+          const errorMsg = translateGoogleError(tokens.error || "Ошибка получения токенов");
+          throw new Error(errorMsg);
+        }
 
         localStorage.setItem("google_access_token", tokens.access_token);
         localStorage.setItem(
@@ -115,7 +158,8 @@ function App() {
         setToken(tokens.access_token);
         setError(null);
       } catch (error) {
-        setError(error.message || "Ошибка авторизации");
+        const errorMsg = translateGoogleError(error.message || "Ошибка авторизации");
+        setError(errorMsg);
         console.error("Auth error:", error);
         handleLogout();
       } finally {
@@ -123,48 +167,12 @@ function App() {
       }
     },
     onError: (errorResponse) => {
-      setError(errorResponse.error || "Неизвестная ошибка");
+      const errorMsg = translateGoogleError(errorResponse.error || "Неизвестная ошибка");
+      setError(errorMsg);
       setIsLoading(false);
     },
     flow: "auth-code",
   });
-
-  const refreshToken = async () => {
-    try {
-      const refreshToken = localStorage.getItem("google_refresh_token");
-      if (!refreshToken) throw new Error("No refresh token");
-
-      const response = await fetch("https://oauth2.googleapis.com/token", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
-        body: new URLSearchParams({
-          client_id: import.meta.env.VITE_CLIENT_ID,
-          client_secret: import.meta.env.VITE_CLIENT_SECRET,
-          refresh_token: refreshToken,
-          grant_type: "refresh_token",
-        }),
-      });
-
-      const data = await response.json();
-      if (!response.ok)
-        throw new Error(data.error || "Ошибка обновления токена");
-
-      localStorage.setItem("google_access_token", data.access_token);
-      localStorage.setItem(
-        "google_token_expiry",
-        (Date.now() + data.expires_in * 1000).toString()
-      );
-
-      setToken(data.access_token);
-      return data.access_token;
-    } catch (error) {
-      console.error("Refresh token error:", error);
-      handleLogout();
-      return null;
-    }
-  };
 
   const handleLogin = () => {
     setIsLoading(true);
@@ -173,6 +181,7 @@ function App() {
   };
 
   const handleLogout = () => {
+    setError(null);
     setToken(null);
     localStorage.removeItem("google_access_token");
     localStorage.removeItem("google_refresh_token");
@@ -207,1385 +216,44 @@ function App() {
   const totalSum = selectedItems.reduce((sum, item) => {
     return (
       sum +
-        (item.name !== "Доставка"
-          ? Number(item.price) * Number(item.quantity)
-          : Number(item.price)) || 0
+      (item.name !== "Доставка"
+        ? Number(item.price) * Number(item.quantity)
+        : Number(item.price)) || 0
     );
   }, 0);
 
-  async function aggregateItemsFromPeriod(
-    token,
-    periodStart,
-    periodEnd,
-    buyerName,
-    constructionName
-  ) {
-    const sheetsInfoResponse = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${
-        import.meta.env.VITE_SPREADSHEET_ID
-      }`,
-      {
-        headers: { Authorization: `Bearer ${token}` },
-      }
-    );
-    const sheetsInfo = await sheetsInfoResponse.json();
-    if (!sheetsInfoResponse.ok) throw new Error(JSON.stringify(sheetsInfo));
-
-    function parseDate(str) {
-      const [d, m, y] = str.split(".");
-      return new Date(`${y}-${m}-${d}T03:00:00`);
-    }
-    const start = parseDate(periodStart);
-    const end = parseDate(periodEnd);
-
-    function extractBuyerName(buyerString) {
-      if (!buyerString) return null;
-
-      // Убираем префикс "Покупатель: "
-      const withoutPrefix = buyerString.replace("Покупатель: ", "");
-
-      // Ищем позицию "ИНН" для разделения
-      const innIndex = withoutPrefix.indexOf("ИНН");
-      if (innIndex === -1) return withoutPrefix.trim();
-
-      // Берем часть до "ИНН" и убираем лишние пробелы
-      return withoutPrefix.substring(0, innIndex).trim();
-    }
-
-    function extractConstructionName(buyerString) {
-      if (!buyerString) return null;
-
-      // Убираем префикс "Объект: "
-      const withoutPrefix = buyerString.replace("Объект: ", "");
-      // убираем лишние пробелы
-      return withoutPrefix.trim();
-    }
-
-    const filteredSheets = sheetsInfo.sheets.filter((sheet) => {
-      const title = sheet.properties.title;
-      if (title.length < 17) return false;
-      const dateStr = title.slice(8, 18);
-
-      if (!/^\d{2}\.\d{2}\.\d{4}$/.test(dateStr)) return false;
-      const date = parseDate(dateStr);
-      return date >= start && date <= end;
+  const resetForm = () => {
+    setOrderProform({
+      orderType: "Накладная",
+      proformNumber: "",
+      proformDate: "",
+      orderPeriodStart: "",
+      orderPeriodEnd: "",
+      buyer: "",
+      constructionName: "",
+      iin: "",
+      bankAccount: "",
+      bankName: "",
     });
 
-    let totalPriceCost = 0;
-
-    try {
-      const proformRecords = await fetch(
-        `https://sheets.googleapis.com/v4/spreadsheets/${
-          import.meta.env.VITE_LIST_SPREADSHEET_ID
-        }/values/Реестр!C3:G1000`,
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        }
-      );
-
-      const proformRecordsData = await proformRecords.json();
-
-      if (proformRecordsData.values) {
-        for (const row of proformRecordsData.values) {
-          if (row[0] && row[2]) {
-            if (/^\d{2}\.\d{2}\.\d{4}$/.test(row[0])) {
-              const rowDate = parseDate(row[0]);
-              if (
-                rowDate >= start &&
-                rowDate <= end &&
-                row[4].split("(")[0].trim() === orderProform.buyer &&
-                row[4].slice(row[4].indexOf("(") + 1, row[4].indexOf(")")).trim() === orderProform.constructionName.trim()
-              ) {
-                const price = Number(row[2].replace(/\s/g, ""));
-                if (!isNaN(price)) {
-                  totalPriceCost += price;
-                }
-              }
-            }
-          }
-        }
-      }
-    } catch (error) {
-      console.error("Ошибка при получении данных из реестра:", error);
-    }
-
-    // Собираем товары со всех листов
-    let allItems = [];
-    for (const sheet of filteredSheets) {
-      const title = sheet.properties.title;
-
-      // Сначала проверяем покупателя на 5-й строке
-      const buyerInfoResp = await fetch(
-        `https://sheets.googleapis.com/v4/spreadsheets/${
-          import.meta.env.VITE_SPREADSHEET_ID
-        }/values/'${encodeURIComponent(title)}'!A5:A8`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-
-      const buyerInfo = await buyerInfoResp.json();
-
-      // Проверяем, совпадает ли покупатель
-      if (buyerInfo.values && (buyerInfo.values[0] && buyerInfo.values[3]) && (buyerInfo.values[0][0] && buyerInfo.values[3][0])) {
-        const buyerString = buyerInfo.values[0][0]; // Берем значение из первой колонки
-        const recievedConstructionName = buyerInfo.values[3][0];
-        const extractedBuyer = extractBuyerName(buyerString);
-        const extractedConstructionName = extractConstructionName(recievedConstructionName);
-
-
-        // Пропускаем лист, если покупатель не совпадает
-        if (extractedBuyer === buyerName && extractedConstructionName === constructionName) {
-          // Получаем диапазон B9:F (до строки с "Итого" в B)
-          const dataResp = await fetch(
-            `https://sheets.googleapis.com/v4/spreadsheets/${
-              import.meta.env.VITE_SPREADSHEET_ID
-            }/values/'${encodeURIComponent(title)}'!B11:F1000`,
-            { headers: { Authorization: `Bearer ${token}` } }
-          );
-          const data = await dataResp.json();
-          if (!data.values) continue;
-          for (let i = 0; i < data.values.length; i++) {
-            const row = data.values[i];
-            if (row[0] === "Итого") break;
-            // if (!row[0] || !row[3]) continue;
-            allItems.push({
-              name: row[0],
-              measure: row[1] || "",
-              quantity: Number(row[2]) || 0,
-              price:
-                row[0] !== "Доставка"
-                  ? Number(row[3])
-                  : Number(String(row[4]).replace(/\s/g, "")),
-            });
-          }
-        }
-      } else {
-        console.log(
-          `Пропускаем лист ${title}: не удалось получить информацию о покупателе`
-        );
-        continue;
-      }
-    }
-
-    // Объединяем одинаковые товары с одинаковой ценой
-    const mergedMap = new Map();
-    let deliveryItem = null;
-
-    for (const item of allItems) {
-      const name = item.name?.trim();
-      const price = Number(item.price);
-      const quantity = Number(item.quantity);
-
-      if (name === "Доставка") {
-        if (deliveryItem) {
-          deliveryItem.quantity += quantity;
-          deliveryItem.price += price;
-        } else {
-          deliveryItem = { ...item };
-        }
-        continue;
-      }
-
-      const key = `${name.toLowerCase()}__${price}`;
-
-      if (mergedMap.has(key)) {
-        const existing = mergedMap.get(key);
-        existing.quantity += quantity;
-      } else {
-        mergedMap.set(key, { ...item });
-      }
-    }
-
-    // Собираем результат
-    const merged = Array.from(mergedMap.values());
-
-    // Добавляем доставку в конец, если она есть
-    if (deliveryItem) {
-      merged.push(deliveryItem);
-    }
-
-    return { merged: merged, totalPriceCost: totalPriceCost };
-  }
-
-  const submitOrder = async (token) => {
+    setSelectedItems([]);
     setError(null);
-    let validToken = token;
-    const expiryTime = localStorage.getItem("google_token_expiry");
-
-    if (!expiryTime || parseInt(expiryTime, 10) - Date.now() < 30000) {
-      validToken = await refreshToken();
-      if (!validToken) {
-        setError("Сессия истекла. Пожалуйста, авторизуйтесь снова.");
-        return;
-      }
-    }
-    setIsSubmitting(true);
-    setSubmissionStatus("");
-    setDownloadUrl("");
-
-    let itemsToUse = selectedItems;
-
-    if (orderProform.orderType === "Счет на оплату") {
-      try {
-        itemsToUse = await aggregateItemsFromPeriod(
-          validToken,
-          orderProform.orderPeriodStart
-            .replace(/-/g, ".")
-            .split(".")
-            .reverse()
-            .join("."),
-          orderProform.orderPeriodEnd
-            .replace(/-/g, ".")
-            .split(".")
-            .reverse()
-            .join("."),
-          orderProform.buyer,
-          orderProform.constructionName
-        );
-      } catch (e) {
-        setError("Ошибка при сборе товаров по периоду: " + e.message);
-        setIsSubmitting(false);
-        return;
-      }
-    }
-
-    const totalSum = (
-      orderProform.orderType === "Накладная" ? itemsToUse : itemsToUse.merged
-    ).reduce((sum, item) => {
-      return (
-        sum +
-        Math.round(
-          orderProform.orderType === "Накладная"
-            ? item.name === "Доставка"
-              ? +item.price
-              : item.price * item.quantity
-            : item.name !== "Доставка"
-            ? item.price * item.quantity
-            : item.price
-        )
-      );
-    }, 0);
-
-    const orderData = {
-      orderProform: `${orderProform.orderType} №${
-        orderProform.proformNumber
-      } от ${(orderProform.proformDate.length === 0
-        ? orderProform.orderPeriodEnd
-        : orderProform.proformDate
-      )
-        .split("-")
-        .reverse()
-        .join(".")} г.`,
-      orderDate: orderProform.proformDate.split("-").reverse().join("."),
-      buyer: `Покупатель: ${orderProform.buyer} ИНН ${orderProform.iin}`,
-      constructionName:
-        orderProform.orderType === "Накладная"
-          ? `Объект: ${orderProform.constructionName}`
-          : "",
-      bankAccount: `р/с ${orderProform.bankAccount} в ${orderProform.bankName}`,
-      items: (orderProform.orderType === "Накладная"
-        ? itemsToUse
-        : itemsToUse.merged
-      ).map((item) => ({
-        name: item.name,
-        price: item.name !== "Доставка" ? +item.price : null,
-        measure: item.measure,
-        quantity: item.quantity,
-        totalPriceCost:
-          orderProform.orderType === "Накладная"
-            ? item.name !== "Доставка"
-              ? item.costPrice * item.quantity
-              : item.price
-            : itemsToUse.totalPriceCost,
-        total: Math.round(
-          orderProform.orderType === "Накладная"
-            ? item.name === "Доставка"
-              ? +item.price
-              : item.price * item.quantity
-            : item.name !== "Доставка"
-            ? item.price * item.quantity
-            : item.price
-        ),
-      })),
-      totalPriceCost: itemsToUse.totalPriceCost,
-      totalSum: `Итого к оплате: ${convertNumberToWordsRu(
-        Math.round(totalSum),
-        {
-          currency: {
-            currencyNameCases: ["сом", "сом", "сом"],
-            fractionalPartNameCases: ["тыйын", "тыйын", "тыйын"],
-          },
-          showNumberParts: {
-            integer: true,
-            fractional: false,
-          },
-        }
-      )}`,
-    };
-
-    console.log("orderData", orderData);
-
-    try {
-      // 1. Создаем новый лист
-      const createResponse = await fetch(
-        `https://sheets.googleapis.com/v4/spreadsheets/${
-          orderProform.orderType === "Накладная"
-            ? import.meta.env.VITE_SPREADSHEET_ID
-            : import.meta.env.VITE_PERIOD_SPREADSHEET_ID
-        }:batchUpdate`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${validToken}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            requests: [
-              {
-                addSheet: {
-                  properties: {
-                    title:
-                      orderProform.orderType === "Счет на оплату"
-                        ? orderData.orderProform.slice(15)
-                        : orderData.orderProform.slice(10),
-                    gridProperties: {
-                      rowCount: 300,
-                      columnCount: 6,
-                    },
-                  },
-                },
-              },
-            ],
-          }),
-        }
-      );
-
-      const createResult = await createResponse.json();
-
-      if (!createResponse.ok) throw new Error(JSON.stringify(createResult));
-      const sheetId = createResult.replies[0].addSheet.properties.sheetId;
-
-      // 2. Подготовка данных
-      const items = orderData.items.map((item, index) => [
-        index + 1,
-        item.name,
-        item.measure,
-        item.quantity,
-        item.price,
-        item.totalPriceCost,
-        item.total,
-      ]);
-
-      const totalSumInDigits = orderData.items.reduce(
-        (sum, item) => sum + item.total,
-        0
-      );
-
-      const totalCostSumInDigits =
-        orderProform.orderType !== "Накладная"
-          ? itemsToUse.totalPriceCost
-          : orderData.items.reduce(
-              (sum, item) =>
-                sum + (item.name !== "Доставка" ? item.totalPriceCost : 0),
-              0
-            );
-
-      const totalRow = 11 + items.length;
-
-      // 3. Формируем все запросы на обновление
-      const requests = [
-        // Объединение ячеек для заголовков
-        {
-          mergeCells: {
-            range: {
-              sheetId,
-              startRowIndex: 0,
-              endRowIndex: 1,
-              startColumnIndex: 0,
-              endColumnIndex: 6,
-            },
-            mergeType: "MERGE_ALL",
-          },
-        },
-        {
-          mergeCells: {
-            range: {
-              sheetId,
-              startRowIndex: 1,
-              endRowIndex: 2,
-              startColumnIndex: 0,
-              endColumnIndex: 6,
-            },
-            mergeType: "MERGE_ALL",
-          },
-        },
-        {
-          mergeCells: {
-            range: {
-              sheetId,
-              startRowIndex: 2,
-              endRowIndex: 3,
-              startColumnIndex: 0,
-              endColumnIndex: 6,
-            },
-            mergeType: "MERGE_ALL",
-          },
-        },
-        {
-          mergeCells: {
-            range: {
-              sheetId,
-              startRowIndex: 4,
-              endRowIndex: 5,
-              startColumnIndex: 0,
-              endColumnIndex: 6,
-            },
-            mergeType: "MERGE_ALL",
-          },
-        },
-        {
-          mergeCells: {
-            range: {
-              sheetId,
-              startRowIndex: 5,
-              endRowIndex: 6,
-              startColumnIndex: 0,
-              endColumnIndex: 6,
-            },
-            mergeType: "MERGE_ALL",
-          },
-        },
-        {
-          mergeCells: {
-            range: {
-              sheetId,
-              startRowIndex: 7,
-              endRowIndex: 8,
-              startColumnIndex: 0,
-              endColumnIndex: 6,
-            },
-            mergeType: "MERGE_ALL",
-          },
-        },
-        // Заполнение данных
-        {
-          updateCells: {
-            range: {
-              sheetId,
-              startRowIndex: 0,
-              endRowIndex: 1,
-              startColumnIndex: 0,
-              endColumnIndex: 1,
-            },
-            rows: [
-              {
-                values: [
-                  {
-                    userEnteredValue: { stringValue: orderData.orderProform },
-                    userEnteredFormat: {
-                      textFormat: {
-                        bold: true,
-                        fontFamily: "Times New Roman",
-                        fontSize: 14,
-                      },
-                      horizontalAlignment: "LEFT",
-                    },
-                  },
-                ],
-              },
-            ],
-            fields: "userEnteredValue,userEnteredFormat",
-          },
-        },
-        // Информация о поставщике
-        {
-          updateCells: {
-            range: {
-              sheetId,
-              startRowIndex: 1,
-              endRowIndex: 3,
-              startColumnIndex: 0,
-              endColumnIndex: 6,
-            },
-            rows: [
-              {
-                values: [
-                  {
-                    userEnteredValue: {
-                      stringValue:
-                        "Поставщик: ИП Женишбек у.Ж. ИНН 22712200100929 р/с 1240040001978972",
-                    },
-                    userEnteredFormat: {
-                      textFormat: {
-                        fontFamily: "Times New Roman",
-                        fontSize: 12,
-                      },
-                      horizontalAlignment: "LEFT",
-                    },
-                    textFormatRuns: [
-                      {
-                        startIndex: 0,
-                        format: {
-                          bold: false,
-                        },
-                      },
-                      {
-                        startIndex: 10, // После "Поставщик: "
-                        format: {
-                          bold: true,
-                        },
-                      },
-                    ],
-                  },
-                ],
-              },
-              {
-                values: [
-                  {
-                    userEnteredValue: {
-                      stringValue: 'в ОАО "Бакай Банк", БИК 124029',
-                    },
-                    userEnteredFormat: {
-                      textFormat: {
-                        bold: true,
-                        fontFamily: "Times New Roman",
-                        fontSize: 12,
-                      },
-                      horizontalAlignment: "LEFT",
-                    },
-                  },
-                ],
-              },
-            ],
-            fields: "userEnteredValue,userEnteredFormat,textFormatRuns",
-          },
-        },
-        // Информация о покупателе
-        {
-          updateCells: {
-            range: {
-              sheetId,
-              startRowIndex: 4,
-              endRowIndex: 6,
-              startColumnIndex: 0,
-              endColumnIndex: 6,
-            },
-            rows: [
-              {
-                values: [
-                  {
-                    userEnteredValue: {
-                      stringValue: orderData.buyer,
-                    },
-                    userEnteredFormat: {
-                      textFormat: {
-                        bold: false,
-                        fontFamily: "Times New Roman",
-                        fontSize: 12,
-                      },
-                      horizontalAlignment: "LEFT",
-                    },
-                    textFormatRuns: [
-                      {
-                        startIndex: 0,
-                        format: {
-                          bold: false,
-                        },
-                      },
-                      {
-                        startIndex: 11,
-                        format: {
-                          bold: true,
-                        },
-                      },
-                    ],
-                  },
-                ],
-              },
-              {
-                values: [
-                  {
-                    userEnteredValue: { stringValue: orderData.bankAccount },
-                    userEnteredFormat: {
-                      textFormat: {
-                        bold: true,
-                        fontFamily: "Times New Roman",
-                        fontSize: 12,
-                      },
-                      horizontalAlignment: "LEFT",
-                    },
-                  },
-                ],
-              },
-            ],
-            fields: "userEnteredValue,userEnteredFormat,textFormatRuns",
-          },
-        },
-        // Информация об объекте
-        {
-          updateCells: {
-            range: {
-              sheetId,
-              startRowIndex: 7,
-              endRowIndex: 8,
-              startColumnIndex: 0,
-              endColumnIndex: 6,
-            },
-            rows: [
-              {
-                values: [
-                  {
-                    userEnteredValue: {
-                      stringValue: orderProform.orderType === "Накладная" ? orderData.constructionName : `Объект: ${orderProform.constructionName}`,
-                    },
-                    userEnteredFormat: {
-                      textFormat: {
-                        bold: false,
-                        fontFamily: "Times New Roman",
-                        fontSize: 12,
-                      },
-                      horizontalAlignment: "LEFT",
-                    },
-                    textFormatRuns: [
-                      {
-                        startIndex: 0,
-                        format: {
-                          bold: false,
-                        },
-                      },
-                      {
-                        startIndex: 7,
-                        format: {
-                          bold: true,
-                        },
-                      },
-                    ],
-                  },
-                ],
-              },
-            ],
-            fields: "userEnteredValue,userEnteredFormat,textFormatRuns",
-          },
-        },
-        // Заголовки таблицы товаров
-        {
-          updateCells: {
-            range: {
-              sheetId,
-              startRowIndex: 9,
-              endRowIndex: 10,
-              startColumnIndex: 0,
-              endColumnIndex: 6,
-            },
-            rows: [
-              {
-                values: [
-                  {
-                    userEnteredValue: { stringValue: "№" },
-                    userEnteredFormat: {
-                      textFormat: {
-                        bold: true,
-                        fontFamily: "Times New Roman",
-                        fontSize: 12,
-                      },
-                      horizontalAlignment: "CENTER",
-                    },
-                  },
-                  {
-                    userEnteredValue: { stringValue: "Наименование" },
-                    userEnteredFormat: {
-                      textFormat: {
-                        bold: true,
-                        fontFamily: "Times New Roman",
-                        fontSize: 12,
-                      },
-                      horizontalAlignment: "CENTER",
-                    },
-                  },
-                  {
-                    userEnteredValue: { stringValue: "Ед. изм." },
-                    userEnteredFormat: {
-                      textFormat: {
-                        bold: true,
-                        fontFamily: "Times New Roman",
-                        fontSize: 12,
-                      },
-                      horizontalAlignment: "CENTER",
-                    },
-                  },
-                  {
-                    userEnteredValue: { stringValue: "Кол-во" },
-                    userEnteredFormat: {
-                      textFormat: {
-                        bold: true,
-                        fontFamily: "Times New Roman",
-                        fontSize: 12,
-                      },
-                      horizontalAlignment: "CENTER",
-                    },
-                  },
-                  {
-                    userEnteredValue: { stringValue: "Цена" },
-                    userEnteredFormat: {
-                      textFormat: {
-                        bold: true,
-                        fontFamily: "Times New Roman",
-                        fontSize: 12,
-                      },
-                      horizontalAlignment: "CENTER",
-                    },
-                  },
-                  {
-                    userEnteredValue: { stringValue: "Сумма" },
-                    userEnteredFormat: {
-                      textFormat: {
-                        bold: true,
-                        fontFamily: "Times New Roman",
-                        fontSize: 12,
-                      },
-                      horizontalAlignment: "CENTER",
-                    },
-                  },
-                ],
-              },
-            ],
-            fields: "userEnteredValue,userEnteredFormat",
-          },
-        },
-        // Данные товаров
-        {
-          updateCells: {
-            range: {
-              sheetId,
-              startRowIndex: 10,
-              endRowIndex: 10 + orderData.items.length,
-              startColumnIndex: 0,
-              endColumnIndex: 6,
-            },
-            rows: orderData.items.map((item, index) => ({
-              values: [
-                {
-                  // №
-                  userEnteredValue: { numberValue: index + 1 },
-                  userEnteredFormat: {
-                    textFormat: { fontFamily: "Times New Roman", fontSize: 12 },
-                    horizontalAlignment: "CENTER",
-                  },
-                },
-                {
-                  // Наименование
-                  userEnteredValue: { stringValue: item.name },
-                  userEnteredFormat: {
-                    textFormat: { fontFamily: "Times New Roman", fontSize: 12 },
-                    horizontalAlignment: "LEFT",
-                  },
-                },
-                {
-                  // Ед. изм.
-                  userEnteredValue: { stringValue: item.measure },
-                  userEnteredFormat: {
-                    textFormat: { fontFamily: "Times New Roman", fontSize: 12 },
-                    horizontalAlignment: "CENTER",
-                  },
-                },
-                {
-                  // Кол-во
-                  userEnteredValue: { numberValue: item.quantity },
-                  userEnteredFormat: {
-                    textFormat: { fontFamily: "Times New Roman", fontSize: 12 },
-                    horizontalAlignment: "CENTER",
-                  },
-                },
-                {
-                  // Цена
-                  userEnteredValue: { numberValue: item.price },
-                  userEnteredFormat: {
-                    textFormat: { fontFamily: "Times New Roman", fontSize: 12 },
-                    horizontalAlignment: "CENTER",
-                  },
-                },
-                {
-                  // Сумма
-                  userEnteredValue: { numberValue: item.total },
-                  userEnteredFormat: {
-                    textFormat: { fontFamily: "Times New Roman", fontSize: 12 },
-                    horizontalAlignment: "CENTER",
-                    numberFormat: {
-                      type: "NUMBER",
-                      pattern: "# ##0",
-                    },
-                  },
-                },
-              ],
-            })),
-            fields: "userEnteredValue,userEnteredFormat",
-          },
-        },
-        // Итог в цифрах
-        {
-          mergeCells: {
-            range: {
-              sheetId,
-              startRowIndex: totalRow - 1,
-              endRowIndex: totalRow,
-              startColumnIndex: 2,
-              endColumnIndex: 6,
-            },
-            mergeType: "MERGE_ALL",
-          },
-        },
-        {
-          updateCells: {
-            range: {
-              sheetId,
-              startRowIndex: totalRow - 1,
-              endRowIndex: totalRow,
-              startColumnIndex: 0,
-              endColumnIndex: 6,
-            },
-            rows: [
-              {
-                values: [
-                  {},
-                  {
-                    userEnteredValue: { stringValue: "Итого" },
-                    userEnteredFormat: {
-                      textFormat: {
-                        bold: true,
-                        fontFamily: "Times New Roman",
-                        fontSize: 12,
-                      },
-                      horizontalAlignment: "LEFT",
-                    },
-                  },
-                  {
-                    userEnteredValue: { numberValue: totalSumInDigits },
-                    userEnteredFormat: {
-                      textFormat: {
-                        bold: true,
-                        fontFamily: "Times New Roman",
-                        fontSize: 12,
-                      },
-                      horizontalAlignment: "RIGHT",
-                      numberFormat: {
-                        type: "NUMBER",
-                        pattern: '# ##0" сом"',
-                      },
-                    },
-                  },
-                  {},
-                  {},
-                  {},
-                ],
-              },
-            ],
-            fields: "userEnteredValue,userEnteredFormat",
-          },
-        },
-        {
-          mergeCells: {
-            range: {
-              sheetId,
-              startRowIndex: totalRow + 1,
-              endRowIndex: totalRow + 2,
-              startColumnIndex: 0,
-              endColumnIndex: 6,
-            },
-            mergeType: "MERGE_ALL",
-          },
-        },
-        {
-          updateCells: {
-            range: {
-              sheetId,
-              startRowIndex: totalRow + 1,
-              endRowIndex: totalRow + 2,
-              startColumnIndex: 0,
-              endColumnIndex: 6,
-            },
-            rows: [
-              {
-                values: [
-                  {
-                    userEnteredValue: {
-                      stringValue: orderData.totalSum,
-                    },
-                    userEnteredFormat: {
-                      textFormat: {
-                        bold: true,
-                        fontFamily: "Times New Roman",
-                        fontSize: 12,
-                      },
-                      horizontalAlignment: "LEFT",
-                    },
-                  },
-                ],
-              },
-            ],
-            fields:
-              "userEnteredValue,userEnteredFormat(textFormat,horizontalAlignment)",
-          },
-        },
-        // Подписи "Сдал","Принял","Руководитель"
-        {
-          mergeCells: {
-            range: {
-              sheetId,
-              startRowIndex: totalRow + 3,
-              endRowIndex: totalRow + 4,
-              startColumnIndex: 0,
-              endColumnIndex: 4,
-            },
-            mergeType: "MERGE_ALL",
-          },
-        },
-        {
-          mergeCells: {
-            range: {
-              sheetId,
-              startRowIndex: totalRow + 3,
-              endRowIndex: totalRow + 4,
-              startColumnIndex: 4,
-              endColumnIndex: 6,
-            },
-            mergeType: "MERGE_ALL",
-          },
-        },
-        {
-          updateCells: {
-            range: {
-              sheetId,
-              startRowIndex: totalRow + 3,
-              endRowIndex: totalRow + 4,
-              startColumnIndex: 0,
-              endColumnIndex: 4,
-            },
-            rows: [
-              {
-                values: [
-                  {
-                    userEnteredValue: {
-                      stringValue:
-                        orderProform.orderType === "Счет на оплату"
-                          ? "Руководитель"
-                          : "Сдал:",
-                    },
-                    userEnteredFormat: {
-                      textFormat: {
-                        bold: true,
-                        fontFamily: "Times New Roman",
-                        fontSize: 12,
-                      },
-                      horizontalAlignment: "LEFT",
-                    },
-                  },
-                ],
-              },
-            ],
-            fields: "userEnteredValue,userEnteredFormat",
-          },
-        },
-        {
-          updateCells: {
-            range: {
-              sheetId,
-              startRowIndex: totalRow + 3,
-              endRowIndex: totalRow + 4,
-              startColumnIndex: 4,
-              endColumnIndex: 6,
-            },
-            rows: [
-              {
-                values: [
-                  {
-                    userEnteredValue: {
-                      stringValue:
-                        orderProform.orderType === "Счет на оплату"
-                          ? "Женишбек у. Ж"
-                          : "Принял:",
-                    },
-                    userEnteredFormat: {
-                      textFormat: {
-                        bold: true,
-                        fontFamily: "Times New Roman",
-                        fontSize: 12,
-                      },
-                      horizontalAlignment: "LEFT",
-                    },
-                  },
-                ],
-              },
-            ],
-            fields: "userEnteredValue,userEnteredFormat",
-          },
-        },
-        // Настройка ширины колонок
-        {
-          updateDimensionProperties: {
-            range: {
-              sheetId,
-              dimension: "COLUMNS",
-              startIndex: 0,
-              endIndex: 1,
-            },
-            properties: { pixelSize: 30 },
-            fields: "pixelSize",
-          },
-        },
-        {
-          updateDimensionProperties: {
-            range: {
-              sheetId,
-              dimension: "COLUMNS",
-              startIndex: 1,
-              endIndex: 2,
-            },
-            properties: { pixelSize: 330 },
-            fields: "pixelSize",
-          },
-        },
-        {
-          updateDimensionProperties: {
-            range: {
-              sheetId,
-              dimension: "COLUMNS",
-              startIndex: 2,
-              endIndex: 3,
-            },
-            properties: { pixelSize: 100 },
-            fields: "pixelSize",
-          },
-        },
-        {
-          updateDimensionProperties: {
-            range: {
-              sheetId,
-              dimension: "COLUMNS",
-              startIndex: 3,
-              endIndex: 4,
-            },
-            properties: { pixelSize: 60 },
-            fields: "pixelSize",
-          },
-        },
-        {
-          updateDimensionProperties: {
-            range: {
-              sheetId,
-              dimension: "COLUMNS",
-              startIndex: 4,
-              endIndex: 5,
-            },
-            properties: { pixelSize: 100 },
-            fields: "pixelSize",
-          },
-        },
-        {
-          updateDimensionProperties: {
-            range: {
-              sheetId,
-              dimension: "COLUMNS",
-              startIndex: 5,
-              endIndex: 6,
-            },
-            properties: { pixelSize: 120 },
-            fields: "pixelSize",
-          },
-        },
-        // Границы таблицы
-        {
-          updateBorders: {
-            range: {
-              sheetId,
-              startRowIndex: 9,
-              endRowIndex:10 + items.length + 1,
-              startColumnIndex: 0,
-              endColumnIndex: 6,
-            },
-            top: { style: "SOLID", width: 1 },
-            bottom: { style: "SOLID", width: 1 },
-            left: { style: "SOLID", width: 1 },
-            right: { style: "SOLID", width: 1 },
-            innerHorizontal: { style: "SOLID", width: 1 },
-            innerVertical: { style: "SOLID", width: 1 },
-          },
-        },
-      ];
-
-      // 4. Отправляем все запросы на редактирование
-      const formatResponse = await fetch(
-        `https://sheets.googleapis.com/v4/spreadsheets/${
-          orderProform.orderType === "Накладная"
-            ? import.meta.env.VITE_SPREADSHEET_ID
-            : import.meta.env.VITE_PERIOD_SPREADSHEET_ID
-        }:batchUpdate`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${validToken}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ requests }),
-        }
-      );
-
-      const formatResult = await formatResponse.json();
-      if (!formatResponse.ok) throw new Error(JSON.stringify(formatResult));
-
-      // 5. Добавляем запись в Реестр
-      try {
-        const proformListResponse = await fetch(
-          `https://sheets.googleapis.com/v4/spreadsheets/${
-            orderProform.orderType === "Накладная"
-              ? import.meta.env.VITE_LIST_SPREADSHEET_ID
-              : import.meta.env.VITE_LIST_PERIOD_SPREADSHEET_ID
-          }/values/Реестр!A:G`,
-          {
-            headers: {
-              Authorization: `Bearer ${validToken}`,
-            },
-          }
-        );
-
-        const proformListData = await proformListResponse.json();
-        if (!proformListResponse.ok)
-          throw new Error(JSON.stringify(proformListData));
-
-        const nextRow =
-          orderProform.orderType === "Накладная"
-            ? Math.max(6, (proformListData.values?.length || 5) + 1)
-            : Math.max(4, (proformListData.values?.length || 3) + 1);
-
-        const proformListRowData = [
-          nextRow - 2,
-          `№${orderProform.proformNumber}`,
-          (orderProform.proformDate || orderProform.orderPeriodEnd)
-            .split("-")
-            .reverse()
-            .join("."),
-          totalSumInDigits,
-          totalCostSumInDigits,
-          totalSumInDigits - totalCostSumInDigits,
-          `${orderProform.buyer} (${orderProform.constructionName})`,
-        ];
-
-        const addToProformListResponse = await fetch(
-          `https://sheets.googleapis.com/v4/spreadsheets/${
-            orderProform.orderType === "Накладная"
-              ? import.meta.env.VITE_LIST_SPREADSHEET_ID
-              : import.meta.env.VITE_LIST_PERIOD_SPREADSHEET_ID
-          }/values/Реестр!A${nextRow}:G${nextRow}?valueInputOption=RAW`,
-          {
-            method: "PUT",
-            headers: {
-              Authorization: `Bearer ${validToken}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              values: [proformListRowData],
-            }),
-          }
-        );
-
-        if(orderProform.orderType === "Накладная") {
-          const proformDate = new Date(orderProform.proformDate);
-          const targetRow = 7 + buyersList.find(buyer => buyer.name === orderProform.buyer)?.id;
-          const month = proformDate.getMonth() + 1;
-          const targetColumn = monthToColumn[month];
-          if (!targetColumn) {
-            console.error(`Не определена колонка для месяца: ${month}`);
-            return;
-          }
-
-          // 1) Прочитать текущее значение ячейки (может быть пустым)
-          const getCellResp = await fetch(
-            `https://sheets.googleapis.com/v4/spreadsheets/${
-              import.meta.env.VITE_LIST_SPREADSHEET_ID
-            }/values/Бухгалтерия!${targetColumn}${targetRow}`,
-            {
-              headers: {
-                Authorization: `Bearer ${validToken}`,
-              },
-            }
-          );
-
-          let currentCellValue = 0;
-          if (getCellResp.ok) {
-            const getCellData = await getCellResp.json();
-            const raw = getCellData?.values?.[0]?.[0];
-            const parsed = parseFloat(String(raw).replace(/\s/g, '').replace(',', '.'));
-            currentCellValue = Number.isFinite(parsed) ? parsed : 0;
-          }
-
-          const newSumValue = currentCellValue + totalSumInDigits;
-
-          // 2) Записать новое суммарное значение
-          const updateCellResp = await fetch(
-            `https://sheets.googleapis.com/v4/spreadsheets/${
-              import.meta.env.VITE_LIST_SPREADSHEET_ID
-            }/values/Бухгалтерия!${targetColumn}${targetRow}?valueInputOption=RAW`,
-            {
-              method: "PUT",
-              headers: {
-                Authorization: `Bearer ${validToken}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                values: [[newSumValue]],
-              }),
-            }
-          );
-
-          if (!updateCellResp.ok) {
-            throw new Error('Ошибка при обновлении Google Sheets');
-          }
-        }
-        
-
-        if (!addToProformListResponse.ok) {
-          const proformListError = await addToProformListResponse.json();
-          console.warn("Ошибка добавления в реестр:", proformListError);
-        }
-
-        const sheetsInfoResponse = await fetch(
-          `https://sheets.googleapis.com/v4/spreadsheets/${
-            orderProform.orderType === "Накладная"
-              ? import.meta.env.VITE_LIST_SPREADSHEET_ID
-              : import.meta.env.VITE_LIST_PERIOD_SPREADSHEET_ID
-          }`,
-          {
-            headers: {
-              Authorization: `Bearer ${validToken}`,
-            },
-          }
-        );
-
-        const sheetsInfo = await sheetsInfoResponse.json();
-        if (!sheetsInfoResponse.ok) throw new Error(JSON.stringify(sheetsInfo));
-
-        const proformListSheet = sheetsInfo.sheets.find(
-          (sheet) => sheet.properties.title === "Реестр"
-        );
-
-        if (proformListSheet) {
-          const proformListSheetId = proformListSheet.properties.sheetId;
-
-          const borderResponse = await fetch(
-            `https://sheets.googleapis.com/v4/spreadsheets/${
-              orderProform.orderType === "Накладная"
-                ? import.meta.env.VITE_LIST_SPREADSHEET_ID
-                : import.meta.env.VITE_LIST_PERIOD_SPREADSHEET_ID
-            }:batchUpdate`,
-            {
-              method: "POST",
-              headers: {
-                Authorization: `Bearer ${validToken}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                requests: [
-                  {
-                    updateBorders: {
-                      range: {
-                        sheetId: proformListSheetId,
-                        startRowIndex: nextRow - 1,
-                        endRowIndex: nextRow,
-                        startColumnIndex: 0,
-                        endColumnIndex: 7,
-                      },
-                      bottom: { style: "SOLID", width: 1 },
-                    },
-                  },
-                ],
-              }),
-            }
-          );
-
-          if (!borderResponse.ok) {
-            const borderError = await borderResponse.json();
-            console.warn("Ошибка добавления границы:", borderError);
-          }
-        } else {
-          console.warn("Лист 'Реестр' не найден");
-        }
-      } catch (proformListError) {
-        console.warn("Ошибка при работе с реестром:", proformListError);
-      }
-
-      const excelDownloadUrl = `https://docs.google.com/spreadsheets/d/${
-        orderProform.orderType === "Накладная"
-          ? import.meta.env.VITE_SPREADSHEET_ID
-          : import.meta.env.VITE_PERIOD_SPREADSHEET_ID
-      }/export?format=xlsx&gid=${sheetId}`;
-      setDownloadUrl(excelDownloadUrl);
-      setSubmissionStatus(
-        orderProform.orderType === "Накладная"
-          ? "Накладная успешно создана!"
-          : "Счет на оплату успешно создан!"
-      );
-      return {
-        sheetId,
-        sheetUrl: `https://docs.google.com/spreadsheets/d/${
-          orderProform.orderType === "Накладная"
-            ? import.meta.env.VITE_SPREADSHEET_ID
-            : import.meta.env.VITE_PERIOD_SPREADSHEET_ID
-        }/edit#gid=${sheetId}`,
-        fileName: `${orderProform.buyer} - №${orderProform.proformNumber} от ${
-          orderProform.proformDate || orderProform.orderPeriodEnd
-        }.xlsx`,
-      };
-    } catch (error) {
-      console.error("Error creating order sheet:", error);
-      const errorData = JSON.parse(error.message);
-      if (errorData.error?.message?.includes("already exists")) {
-        setError(
-          `${orderProform.orderType} с таким названием уже существует. Пожалуйста, измените название и попробуйте снова.`
-        );
-      }
-      throw error;
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const validateForm = () => {
-    const requiredFields = {
-      buyer: orderProform.buyer.trim() !== "",
-      iin: orderProform.iin.trim() !== "" && !iinError,
-      bankAccount: orderProform.bankAccount.trim() !== "" && !bankAccountError,
-      bankName: orderProform.bankName.trim() !== "",
-      proformNumber: orderProform.proformNumber.trim() !== "",
-    };
-
-    if (orderProform.orderType === "Накладная") {
-      requiredFields.proformDate = orderProform.proformDate.trim() !== "";
-      requiredFields.constructionName =
-        orderProform.constructionName.trim() !== "";
-    } else {
-      requiredFields.orderPeriodStart =
-        orderProform.orderPeriodStart.trim() !== "";
-      requiredFields.orderPeriodEnd = orderProform.orderPeriodEnd.trim() !== "";
-    }
-
-    return Object.values(requiredFields).every(Boolean);
+    setSubmissionStatus(null);
+    setDownloadUrl(null);
+    setIinError(null);
+    setBankAccountError(null);
+    setIsEditingExisting(false);
   };
 
   useEffect(() => {
-    if (debouncedIin === "") {
-      setIinError("");
-    } else if (!/^\d{14}$/.test(debouncedIin)) {
-      setIinError("ИИН должен состоять ровно из 14 цифр");
-    } else {
-      setIinError("");
+    if (debouncedIin) {
+      setIinError(/^\d{14}$/.test(debouncedIin) ? null : "ИИН — ровно 14 цифр");
     }
   }, [debouncedIin]);
 
   useEffect(() => {
-    if (debouncedBankAccount === "") {
-      setBankAccountError("");
-    } else if (!/^\d{16}$/.test(debouncedBankAccount)) {
-      setBankAccountError("Банковский счет должен состоять ровно из 16 цифр");
-    } else {
-      setBankAccountError("");
+    if (debouncedBankAccount) {
+      setBankAccountError(/^\d{16}$/.test(debouncedBankAccount) ? null : "Р/с — ровно 16 цифр");
     }
   }, [debouncedBankAccount]);
 
@@ -1600,65 +268,79 @@ function App() {
     }
   }, [orderProform.buyer]);
 
-  useEffect(() => {
-    const checkAuth = async () => {
-      const accessToken = localStorage.getItem("google_access_token");
-      const expiryTime = localStorage.getItem("google_token_expiry");
+  const handleSubmit = async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      await submitOrder(token, orderProform, selectedItems, setError, setIsSubmitting, setSubmissionStatus, setDownloadUrl, isEditingExisting, convertToInvoice);
+    } catch (err) {
+      console.error("Ошибка в handleSubmit:", err);
+      const errorMsg = translateGoogleError(err.message);
+      setError(errorMsg);
+    } finally {
+      setIsSubmitting(false);
+      setIsLoading(false);
+    }
 
-      if (!accessToken || !expiryTime) {
-        handleLogout();
-        return;
-      }
+  }
 
-      const isExpiring = parseInt(expiryTime, 10) - Date.now() < 5 * 60 * 1000;
-      if (isExpiring) {
-        await refreshToken();
-      } else {
-        setToken(accessToken);
-      }
-    };
-
-    checkAuth();
-    const interval = setInterval(checkAuth, 60 * 1000); // Каждую минуту
-    return () => clearInterval(interval);
-  }, []);
+  const handleLoadProform = async () => {
+    setConvertToInvoice(false);
+    await loadInvoice(token, loadProform, setOrderProform, setSelectedItems, setError, setModalOpen, setIsLoadingInvoice, setIsEditingExisting);
+  }
 
   return (
     <>
       {token ? (
-        <div className="container mx-auto p-4 mb-6 flex flex-col items-center">
-          <div className="w-full flex justify-end mb-2">
-            <Button variant="outline" onClick={handleLogout}>
-              Выйти
-            </Button>
+        <div className="container mx-auto py-6 flex flex-col items-center">
+          <div className="w-full flex justify-end mb-3">
+            <Button variant="outline" className="cursor-pointer" onClick={handleLogout}>Выйти</Button>
           </div>
-          <Card className="flex justify-between w-[66%] md:w-1/2">
-            <CardHeader className="w-full md:w-[700px]">
-              <Label htmlFor="orderType">Тип документа</Label>
-              <Select
-                value={orderProform.orderType}
-                onValueChange={(value) => {
-                  setOrderProform((prev) => ({
-                    ...prev,
-                    orderType: value,
-                  }));
-                  setSubmissionStatus(null);
-                  setDownloadUrl(null);
-                }}
-              >
-                <SelectTrigger className="w-1/3">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="Накладная">Накладная</SelectItem>
-                  <SelectItem value="Счет на оплату">Счет на оплату</SelectItem>
-                </SelectContent>
-              </Select>
+          <Card className="flex justify-between w-full lg:w-3/4 xl:w-1/2">
+            <CardHeader>
+              <div className="grid grid-cols-1 items-end gap-4 md:grid-cols-3">
+                <div className="flex flex-col">
+                  <Label htmlFor="orderType" className="mb-2">Тип документа</Label>
+                  <Select
+                    value={orderProform.orderType}
+                    disabled={isEditingExisting}
+                    onValueChange={(value) => {
+                      setOrderProform((prev) => ({
+                        ...prev,
+                        orderType: value,
+                      }));
+                      setSubmissionStatus(null);
+                      setDownloadUrl(null);
+                    }}
+                  >
+                    <SelectTrigger className="w-auto">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Накладная">Накладная</SelectItem>
+                      <SelectItem value="Счет на оплату">Счет на оплату</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <Button className="cursor-pointer" variant="outline" onClick={() => setModalOpen(true)}>
+                  Открыть накладную
+                </Button>
+
+                <Button
+                  variant="outline"
+                  onClick={resetForm}
+                  className="cursor-pointer"
+                >
+                  Создать накладную
+                </Button>
+              </div>
             </CardHeader>
+
             <CardContent>
               <div className="grid grid-cols-1 items-end md:grid-cols-3 gap-4 mb-4">
                 <div>
-                  <Label htmlFor="orderNumber">
+                  <Label htmlFor="orderNumber" className="mb-2">
                     {orderProform.orderType === "Накладная"
                       ? "Номер накладной"
                       : "Номер счета на оплату"}
@@ -1667,6 +349,8 @@ function App() {
                     id="orderNumber"
                     type="text"
                     value={orderProform.proformNumber}
+                    disabled={isEditingExisting}
+                    autoComplete="off"
                     onChange={(e) =>
                       setOrderProform((prev) => ({
                         ...prev,
@@ -1677,28 +361,30 @@ function App() {
                 </div>
                 {orderProform.orderType === "Накладная" ? (
                   <div>
-                    <Label htmlFor="orderDate">Дата заказа</Label>
+                    <Label htmlFor="orderDate" className="mb-2">Дата заказа</Label>
                     <Input
                       id="orderDate"
                       type="date"
                       value={orderProform.proformDate}
+                      disabled={isEditingExisting}
                       onChange={(e) =>
                         setOrderProform((prev) => ({
                           ...prev,
                           proformDate: e.target.value,
                         }))
                       }
-                      className="w-full"
+                      className="block"
                     />
                   </div>
                 ) : (
                   <>
                     <div>
-                      <Label htmlFor="orderPeriodStrt">Период оплаты</Label>
+                      <Label htmlFor="orderPeriodStrt" className="mb-2">Период оплаты</Label>
                       <Input
                         id="orderPeriodStart"
                         type="date"
                         value={orderProform.orderPeriodStart}
+                        disabled={isEditingExisting}
                         onChange={(e) =>
                           setOrderProform((prev) => ({
                             ...prev,
@@ -1709,11 +395,12 @@ function App() {
                       />
                     </div>
                     <div>
-                      <Label htmlFor="orderPeriodEnd">Период оплаты</Label>
+                      <Label htmlFor="orderPeriodEnd" className="mb-2">Период оплаты</Label>
                       <Input
                         id="orderPeriodEnd"
                         type="date"
                         value={orderProform.orderPeriodEnd}
+                        disabled={isEditingExisting}
                         onChange={(e) =>
                           setOrderProform((prev) => ({
                             ...prev,
@@ -1726,7 +413,7 @@ function App() {
                   </>
                 )}
                 <div>
-                  <Label htmlFor="buyer">Покупатель</Label>
+                  <Label htmlFor="buyer" className="mb-2">Покупатель</Label>
                   <Popover open={isPopoverOpen} onOpenChange={setIsPopoverOpen}>
                     <PopoverTrigger asChild>
                       <div>
@@ -1734,6 +421,8 @@ function App() {
                           id="buyer"
                           type="text"
                           value={orderProform.buyer}
+                          autoComplete="off"
+                          disabled={isEditingExisting}
                           onChange={(e) => {
                             setOrderProform((prev) => ({
                               ...prev,
@@ -1742,7 +431,6 @@ function App() {
                             setIsPopoverOpen(true);
                           }}
                           onClick={() => setIsPopoverOpen(true)}
-                          placeholder="Введите название покупателя"
                         />
                       </div>
                     </PopoverTrigger>
@@ -1778,12 +466,13 @@ function App() {
                 </div>
 
                 <div>
-                  <Label htmlFor="iin">ИИН</Label>
+                  <Label htmlFor="iin" className="mb-2">ИИН</Label>
                   <Input
                     id="iin"
                     type="text"
                     value={orderProform.iin}
                     maxLength={14}
+                    disabled={isEditingExisting}
                     onChange={(e) => {
                       const value = e.target.value.replace(/\D/g, "");
                       setOrderProform((prev) => ({
@@ -1797,12 +486,13 @@ function App() {
                   )}
                 </div>
                 <div>
-                  <Label htmlFor="bankAccount">Р/С</Label>
+                  <Label htmlFor="bankAccount" className="mb-2">Р/С</Label>
                   <Input
                     id="bankAccount"
                     type="text"
                     value={orderProform.bankAccount}
                     maxLength={16}
+                    disabled={isEditingExisting}
                     onChange={(e) => {
                       const value = e.target.value.replace(/\D/g, "");
                       setOrderProform((prev) => ({
@@ -1818,11 +508,12 @@ function App() {
                   )}
                 </div>
                 <div>
-                  <Label htmlFor="bankName">Название Банка</Label>
+                  <Label htmlFor="bankName" className="mb-2">Название Банка</Label>
                   <Input
                     id="bankName"
                     type="text"
                     value={orderProform.bankName}
+                    disabled={isEditingExisting}
                     onChange={(e) =>
                       setOrderProform((prev) => ({
                         ...prev,
@@ -1831,80 +522,124 @@ function App() {
                     }
                   />
                 </div>
-                { orderProform.buyer.length > 0 && (
-                    <div>
-                      <Label htmlFor="constructionName">Название объекта</Label>
-                      <Popover
-                        open={isPopoverOpen2}
-                        onOpenChange={setIsPopoverOpen2}
+                {orderProform.buyer.length > 0 && (
+                  <div>
+                    <Label htmlFor="constructionName">Название объекта</Label>
+                    <Popover
+                      open={isPopoverOpen2}
+                      onOpenChange={setIsPopoverOpen2}
+                    >
+                      <PopoverTrigger asChild>
+                        <div>
+                          <Input
+                            id="constructionName"
+                            type="text"
+                            value={orderProform.constructionName}
+                            autoComplete="off"
+                            disabled={isEditingExisting}
+                            onChange={(e) => {
+                              setOrderProform((prev) => ({
+                                ...prev,
+                                constructionName: e.target.value,
+                              }));
+                              setIsPopoverOpen2(true);
+                            }}
+                            onClick={() => setIsPopoverOpen2(true)}
+                            placeholder="Введите название объекта"
+                          />
+                        </div>
+                      </PopoverTrigger>
+                      <PopoverContent
+                        className="p-4"
+                        align="start"
+                        onOpenAutoFocus={(e) => e.preventDefault()}
                       >
-                        <PopoverTrigger asChild>
-                          <div>
-                            <Input
-                              id="constructionName"
-                              type="text"
-                              value={orderProform.constructionName}
-                              onChange={(e) => {
-                                setOrderProform((prev) => ({
-                                  ...prev,
-                                  constructionName: e.target.value,
-                                }));
-                                setIsPopoverOpen2(true);
-                              }}
-                              onClick={() => setIsPopoverOpen2(true)}
-                              placeholder="Введите название объекта"
-                            />
+                        {orderProform.buyer.length > 0 && (
+                          <div className="space-y-2">
+                            {buyersList
+                              .find(
+                                (potential) =>
+                                  orderProform.buyer === potential.name
+                              )
+                              ?.constructions?.map((construction) => (
+                                <div
+                                  key={construction}
+                                  className="p-2 hover:bg-gray-100 rounded cursor-pointer"
+                                  onClick={() => {
+                                    setOrderProform((prev) => ({
+                                      ...prev,
+                                      constructionName: construction,
+                                    }));
+                                    setIsPopoverOpen2(false);
+                                  }}
+                                >
+                                  <span className="text-sm">
+                                    {construction}
+                                  </span>
+                                </div>
+                              ))}
                           </div>
-                        </PopoverTrigger>
-                        <PopoverContent
-                          className="p-4"
-                          align="start"
-                          onOpenAutoFocus={(e) => e.preventDefault()}
-                        >
-                          {orderProform.buyer.length > 0 && (
-                            <div className="space-y-2">
-                              {buyersList
-                                .find(
-                                  (potential) =>
-                                    orderProform.buyer === potential.name
-                                )
-                                ?.constructions?.map((construction) => (
-                                  <div
-                                    key={construction}
-                                    className="p-2 hover:bg-gray-100 rounded cursor-pointer"
-                                    onClick={() => {
-                                      setOrderProform((prev) => ({
-                                        ...prev,
-                                        constructionName: construction,
-                                      }));
-                                      setIsPopoverOpen2(false);
-                                    }}
-                                  >
-                                    <span className="text-sm">
-                                      {construction}
-                                    </span>
-                                  </div>
-                                ))}
-                            </div>
-                          )}
-                        </PopoverContent>
-                      </Popover>
+                        )}
+                      </PopoverContent>
+                    </Popover>
+                  </div>
+                )}
+
+                <Dialog open={modalOpen} onOpenChange={setModalOpen}>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Загрузить накладную</DialogTitle>
+                    </DialogHeader>
+                    <div className="space-y-4 pt-4">
+                      <Label htmlFor="loadProform">Номер накладной</Label>
+                      <Input
+                        id="loadProform"
+                        value={loadProform}
+                        onChange={e => {
+                          const val = e.target.value.replace(/\D/g, ""); // только цифры
+                          setLoadProform(val);
+                        }}
+                        maxLength={5}
+                        placeholder="Например: 145"
+                      />
+                      <Button className="cursor-pointer" onClick={handleLoadProform} disabled={!loadProform.trim() || isSubmitting}>
+                        {isLoadingInvoice ? (
+                          <>
+                            <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                            Загрузка...
+                          </>
+                        ) : (
+                          "Загрузить"
+                        )}
+                      </Button>
+                      {error && (
+                        <p className="text-red-600 text-sm mt-2">{error}</p>
+                      )}
                     </div>
-                  )}
+                  </DialogContent>
+                </Dialog>
+
+                {isEditingExisting && orderProform.buyer.trim() === "ЗАО 'Браво Плюс'" && (
+                  <div className="flex items-center space-x-2 border p-2 rounded-md">
+                    <input
+                      type="checkbox"
+                      id="convert-check"
+                      checked={convertToInvoice}
+                      onChange={(e) => setConvertToInvoice(e.target.checked)}
+                      className="w-4 h-4.5 cursor-pointer"
+                    />
+                    <Label htmlFor="convert-check" className="cursor-pointer">Сделать накладной</Label>
+                  </div>
+                )}
+
                 <Button
-                  onClick={() => submitOrder(token)}
-                  disabled={
-                    isSubmitting ||
-                    !!iinError ||
-                    !!bankAccountError ||
-                    !validateForm() ||
-                    (orderProform.orderType === "Накладная" &&
-                      selectedItems.length === 0)
-                  }
-                  className="w-1/2"
+                  onClick={handleSubmit}
+                  disabled={isSubmitting || !isValid || (orderProform.orderType === "Накладная" && selectedItems.length === 0)}
+                  className="w-1/2 cursor-pointer"
                 >
-                  {isSubmitting ? "Отправка..." : "Оформить"}
+                  {isSubmitting ? "Отправка..." : isEditingExisting ? "Изменить" : "Оформить"}
                 </Button>
+
               </div>
               {error && <span className="text-red-500">{error}</span>}
               {submissionStatus && (
@@ -1999,15 +734,15 @@ function App() {
                               Цена:{" "}
                               {item.name !== "Доставка" ? (
                                 <>
-                                  {Number(item.price)} сом × {item.quantity} {item.measure} =
+                                  {item.price ? Number(item.price) : 0} сом × {item.quantity} {item.measure} =
                                   <span className="font-bold">
                                     {" "}
-                                    {Number(item.price) * item.quantity} сом
+                                    {item.price ? Number(item.price) : 0 * item.quantity} сом
                                   </span>
                                 </>
                               ) : (
                                 <span className="font-bold">
-                                  {item.price} сом
+                                  {item.price ? Number(item.price) : 0} сом
                                 </span>
                               )}
                             </p>
@@ -2042,9 +777,9 @@ function App() {
                                     selectedItems.map((i) =>
                                       i.id === item.id
                                         ? {
-                                            ...i,
-                                            price: newPrice,
-                                          }
+                                          ...i,
+                                          price: newPrice,
+                                        }
                                         : i
                                     )
                                   );
@@ -2067,9 +802,9 @@ function App() {
                                       selectedItems.map((i) =>
                                         i.id === item.id
                                           ? {
-                                              ...i,
-                                              costPrice: newPrice,
-                                            }
+                                            ...i,
+                                            costPrice: newPrice,
+                                          }
                                           : i
                                       )
                                     );
@@ -2089,8 +824,8 @@ function App() {
                       ))}
                       <div className="text-right mt-4">
                         <h3 className="text-lg font-bold">
-                          Итого:{" "}
-                          {convertNumberToWordsRu(Math.round(totalSum), {
+                          Итого:{` ${totalSum} `}
+                          {`(${convertNumberToWordsRu(Math.round(totalSum), {
                             currency: {
                               currencyNameCases: ["сом", "сома", "сом"],
                               fractionalPartNameCases: [
@@ -2103,7 +838,7 @@ function App() {
                               integer: true,
                               fractional: false,
                             },
-                          })}
+                          })})`}
                         </h3>
                       </div>
                     </div>
@@ -2112,6 +847,8 @@ function App() {
               </Card>
             </>
           )}
+
+
         </div>
       ) : (
         <div className="w-full h-screen flex flex-col justify-center items-center gap-4">
