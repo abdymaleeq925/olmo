@@ -105,7 +105,7 @@ function App() {
           />
 
           <div className="flex flex-col items-center gap-4 mt-8 pt-6 border-t">
-            {invoice.isEditing && orderProform.buyer === "ЗАО 'Браво Плюс'" && (
+            {invoice.isEditing && ["ЗАО 'Браво Плюс'", "Артис Строй Констракшн"].includes(orderProform.buyer) && (
               <div className="flex items-center gap-2 mb-2">
                 <input
                   type="checkbox"

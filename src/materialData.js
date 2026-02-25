@@ -3509,6 +3509,11 @@ export const materialData = [
     name: "Диск отрезной по дереву Bolian, 230мм",
     measure: "шт",
   },
+  {
+    id: 703,
+    name: "Сетка штукатурная металлическая",
+    measure: "рул",
+  },
 ];
 
 export const buyersList = [

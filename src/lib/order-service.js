@@ -543,13 +543,13 @@ export async function submitOrder(
     setSubmissionStatus("");
     setDownloadUrl("");
 
-    const isBravoPlus = orderProform.buyer.trim() === "ЗАО 'Браво Плюс'";
+    const isPreProform = ["ЗАО 'Браво Плюс'", "Артис Строй Констракшн"].includes(orderProform.buyer.trim());
     const spreadsheetId = orderProform.orderType === "Накладная"
         ? import.meta.env.VITE_SPREADSHEET_ID
         : import.meta.env.VITE_PERIOD_SPREADSHEET_ID;
 
     let itemsToUse = selectedItems;
-    let documentTypeTitle = isBravoPlus && !convertToInvoice ? "Счет на оплату" : "Накладная";
+    let documentTypeTitle = isPreProform && !convertToInvoice ? "Счет на оплату" : "Накладная";
 
     if (orderProform.orderType === "Счет на оплату") {
         try {
@@ -591,7 +591,7 @@ export async function submitOrder(
     };
 
     try {
-        const sheetTitlePrefix = orderProform.orderType === "Счет на оплату" || isBravoPlus ? orderData.orderProform.slice(15) : orderData.orderProform.slice(10);
+        const sheetTitlePrefix = orderProform.orderType === "Счет на оплату" || isPreProform ? orderData.orderProform.slice(15) : orderData.orderProform.slice(10);
         const { sheetId, sheetTitle, existed } = await getOrCreateSheet(validToken, spreadsheetId, orderProform.proformNumber, orderProform.orderType, sheetTitlePrefix);
 
         if (!isEditingExisting && existed) {
